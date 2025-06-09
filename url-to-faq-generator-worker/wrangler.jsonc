@@ -1,5 +1,5 @@
 {
-  "name": "url-to-faq-generator-worker",
+  "name": "url-to-faq-generator-worker", 
   "compatibility_date": "2024-12-19",
   "main": "src/index.js",
   "ai": {
@@ -12,6 +12,9 @@
     }
   ],
   "limits": {
-    "cpu_ms": 60000
-  }
+    "cpu_ms": 90000
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ]
 }
