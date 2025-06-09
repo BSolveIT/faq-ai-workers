@@ -1,13 +1,36 @@
 /**
- * ULTIMATE URL-to-FAQ Generator - Best of Everything!
+ * ULTIMATE URL-to-FAQ Generator - Fixed with Timeouts
  * 
  * Cost: £0.035 vs $15-20 per request (99.8% savings!)
  * AI: Llama 4 Scout 17B (Mixture of Experts - best available)
  * Parsing: node-html-parser (lightweight, fast, accurate)
- * Features: Enhanced 3-step process, superior content extraction
+ * Features: Enhanced 3-step process with timeout controls
  */
 
 import { parse } from 'node-html-parser';
+
+// Helper function for AI calls with timeout
+async function callAIWithTimeout(aiBinding, model, messages, options = {}, timeoutMs = 25000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    const response = await aiBinding.run(model, {
+      messages,
+      temperature: options.temperature || 0.4,
+      max_tokens: options.max_tokens || 1024,
+      signal: controller.signal
+    });
+    return response;
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error('AI request timed out');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 export default {
   async fetch(request, env, ctx) {
@@ -32,6 +55,7 @@ export default {
 
     try {
       console.log('Starting ULTIMATE FAQ generation...');
+      const startTime = Date.now();
       const { url: targetUrl, options = {} } = await request.json();
       
       if (!targetUrl) {
@@ -60,7 +84,7 @@ export default {
         });
       }
 
-      // Enhanced rate limiting (15/hour vs legacy 5/hour)
+      // Enhanced rate limiting (10/hour)
       const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
       const currentHour = Math.floor(Date.now() / (60 * 60 * 1000));
       const rateLimitKey = `url_faq:${clientIP}:${currentHour}`;
@@ -70,11 +94,11 @@ export default {
         usageData = { count: 0, hour: currentHour };
       }
 
-      if (usageData.count >= 15) {
+      if (usageData.count >= 10) {
         const nextHour = new Date((currentHour + 1) * 60 * 60 * 1000);
         return new Response(JSON.stringify({
           rateLimited: true,
-          error: 'Hourly FAQ generation limit reached. You can generate up to 15 FAQ sets per hour.',
+          error: 'Hourly FAQ generation limit reached. You can generate up to 10 FAQ sets per hour.',
           resetTime: nextHour.toISOString(),
           success: false
         }), {
@@ -86,22 +110,24 @@ export default {
       const faqCount = Math.min(Math.max(options.faqCount || 12, 6), 20);
       console.log(`Generating ${faqCount} FAQs for: ${targetUrl}`);
 
-      // STEP 1: Enhanced content fetching and parsing
-      console.log('Step 1: Enhanced content extraction with node-html-parser...');
+      // STEP 1: Enhanced content fetching and parsing WITH TIMEOUT
+      console.log('Step 1: Enhanced content extraction...');
       let pageContent, title, headings, extractedContent, metadata;
       
       try {
+        // Fetch with timeout
+        const controller = new AbortController();
+        const fetchTimeout = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+        
         const pageResponse = await fetch(targetUrl, {
+          signal: controller.signal,
           headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; FAQ-Generator-Bot/3.0; +https://faq-generator.com/bot)',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
-          },
-          cf: { timeout: 20000, cacheTtl: 300 }
+            'User-Agent': 'Mozilla/5.0 (compatible; FAQ-Generator-Bot/3.0)',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          }
         });
+
+        clearTimeout(fetchTimeout);
 
         if (!pageResponse.ok) {
           throw new Error(`HTTP ${pageResponse.status}: ${pageResponse.statusText}`);
@@ -121,7 +147,7 @@ export default {
           throw new Error('Insufficient content found for FAQ generation');
         }
 
-        console.log(`ULTIMATE extraction: ${extractedContent.length} chars, ${headings.length} headings, ${metadata.sections} sections`);
+        console.log(`Extraction complete: ${extractedContent.length} chars`);
       } catch (error) {
         console.error('Content extraction failed:', error);
         return new Response(JSON.stringify({
@@ -133,78 +159,63 @@ export default {
         });
       }
 
-      // STEP 2: LLAMA 4 SCOUT Analysis and Generation
-      console.log('Step 2: Llama 4 Scout AI analysis and generation...');
+      // STEP 2: LLAMA 4 SCOUT Generation (SIMPLIFIED - NO CHUNKING)
+      console.log('Step 2: Llama 4 Scout AI generation...');
       
-      // Prepare content for AI (with chunking if needed)
-      let contentForAI = extractedContent;
-      const CONTENT_LIMIT = 8000;
-      
-      if (extractedContent.length > CONTENT_LIMIT) {
-        console.log('Content chunking required...');
-        contentForAI = await chunkAndSummarize(extractedContent, env.AI);
-        console.log(`Content summarized: ${contentForAI.length} chars`);
-      }
+      // Limit content to avoid chunking and multiple AI calls
+      const contentForAI = extractedContent.substring(0, 6000);
 
-      const enhancedPrompt = `Analyze this website and generate ${faqCount} comprehensive, business-relevant FAQs.
+      const enhancedPrompt = `Analyze this website and generate ${faqCount} comprehensive FAQs.
 
-WEBSITE ANALYSIS:
 URL: ${targetUrl}
 Title: ${title}
-Content Type: ${metadata.contentType}
-Key Sections: ${metadata.sections}
-Primary Headings: ${headings.slice(0, 8).join(' | ')}
+Main Topics: ${headings.slice(0, 5).join(' | ')}
 
-CONTENT SAMPLE:
-${contentForAI.substring(0, 4000)}
+Content:
+${contentForAI}
 
-GENERATION REQUIREMENTS:
-1. Create EXACTLY ${faqCount} FAQs covering all important aspects
-2. Focus on: services, products, contact info, pricing, processes, technical details
-3. Use natural, conversational question phrasing that users would actually ask
-4. Provide comprehensive, helpful answers based on the actual content
-5. Include specific details from the website when available
-6. Ensure questions flow logically from general to specific
-
-Return in this exact Schema.org format:
+Generate EXACTLY ${faqCount} FAQs in this Schema.org format:
 {
   "@context": "https://schema.org",
   "@type": "FAQPage", 
   "mainEntity": [
     {
       "@type": "Question",
-      "name": "Question text here?",
+      "name": "Your question here?",
       "acceptedAnswer": {
         "@type": "Answer", 
-        "text": "Comprehensive, detailed answer here"
+        "text": "Your comprehensive answer here"
       }
     }
   ]
 }
 
-CRITICAL: Return ONLY the JSON object with exactly ${faqCount} FAQs. Make answers informative and specific to this business.`;
+Return ONLY the JSON object. Be specific and helpful.`;
 
       let generatedFAQs;
       try {
-        const generationResponse = await env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
-          messages: [
+        const generationResponse = await callAIWithTimeout(
+          env.AI,
+          '@cf/meta/llama-4-scout-17b-16e-instruct',
+          [
             {
               role: 'system',
-              content: 'You are an expert FAQ generator with deep understanding of business content. Create comprehensive, helpful FAQs in valid Schema.org JSON format only. Use your Mixture of Experts architecture to provide the highest quality business-relevant content.'
+              content: 'You are an expert FAQ generator. Create helpful FAQs in valid JSON format only.'
             },
             {
               role: 'user',
               content: enhancedPrompt
             }
           ],
-          temperature: 0.4,
-          max_tokens: 3072
-        });
+          { temperature: 0.4, max_tokens: 3072 },
+          30000 // 30 second timeout for generation
+        );
 
         console.log('Llama 4 Scout generation completed');
         
         let responseText = typeof generationResponse.response === 'string' ? 
-          generationResponse.response : generationResponse.response.text || '';
+          generationResponse.response : 
+          generationResponse.response?.text || JSON.stringify(generationResponse.response);
 
         // Enhanced JSON cleaning
         responseText = cleanJsonResponse(responseText);
@@ -214,9 +225,9 @@ CRITICAL: Return ONLY the JSON object with exactly ${faqCount} FAQs. Make answer
           throw new Error('Invalid FAQ structure generated');
         }
 
-        console.log(`Llama 4 Scout generated ${generatedFAQs.mainEntity.length} FAQs`);
+        console.log(`Generated ${generatedFAQs.mainEntity.length} FAQs`);
       } catch (error) {
-        console.error('Llama 4 Scout generation failed:', error);
+        console.error('FAQ generation failed:', error);
         return new Response(JSON.stringify({
           success: false,
           error: `FAQ generation failed: ${error.message}`
@@ -226,18 +237,13 @@ CRITICAL: Return ONLY the JSON object with exactly ${faqCount} FAQs. Make answer
         });
       }
 
-      // STEP 3: Enhanced quality validation and optimization
-      console.log('Step 3: Enhanced quality validation...');
-      
+      // STEP 3: Quick validation
       const validFAQs = generatedFAQs.mainEntity.filter(faq => {
         return faq?.name && 
                faq?.acceptedAnswer?.text && 
-               faq.name.length > 15 && 
-               faq.name.length < 200 &&
-               faq.acceptedAnswer.text.length > 80 &&
-               faq.name.includes('?') &&
-               !faq.name.toLowerCase().includes('question') &&
-               !faq.acceptedAnswer.text.toLowerCase().includes('[insert');
+               faq.name.length > 10 && 
+               faq.acceptedAnswer.text.length > 50 &&
+               faq.name.includes('?');
       });
 
       if (validFAQs.length < 3) {
@@ -258,7 +264,11 @@ CRITICAL: Return ONLY the JSON object with exactly ${faqCount} FAQs. Make answer
         expirationTtl: 3600
       });
 
-      // Enhanced response with metadata
+      // Calculate processing time
+      const processingTime = Date.now() - startTime;
+      console.log(`Total processing time: ${processingTime}ms`);
+
+      // Enhanced response
       const response = {
         success: true,
         source: targetUrl,
@@ -266,23 +276,15 @@ CRITICAL: Return ONLY the JSON object with exactly ${faqCount} FAQs. Make answer
         metadata: {
           title: title,
           extractionMethod: 'ultimate-node-html-parser-llama4-scout',
-          headings: headings,
+          headings: headings.slice(0, 10),
           totalExtracted: finalFAQs.length,
-          aiModel: 'Llama 4 Scout 17B (Mixture of Experts)',
-          processingSteps: 3,
+          aiModel: 'Llama 4 Scout 17B',
+          processingTime: processingTime,
           contentAnalysis: {
             originalLength: pageContent.length,
             extractedLength: extractedContent.length,
             sectionsFound: metadata.sections,
-            contentType: metadata.contentType,
-            chunked: extractedContent.length > 8000
-          },
-          request: {
-            requestId: `req_${Date.now()}`,
-            urlProcessed: targetUrl,
-            generatedAt: new Date().toISOString(),
-            faqCount: finalFAQs.length,
-            processingTime: Date.now() - Date.now()
+            contentType: metadata.contentType
           }
         },
         usage: {
@@ -292,7 +294,6 @@ CRITICAL: Return ONLY the JSON object with exactly ${faqCount} FAQs. Make answer
         }
       };
 
-      console.log(`ULTIMATE FAQ generation completed: ${finalFAQs.length} premium FAQs`);
       return new Response(JSON.stringify(response), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
@@ -310,7 +311,7 @@ CRITICAL: Return ONLY the JSON object with exactly ${faqCount} FAQs. Make answer
   }
 };
 
-// ULTIMATE content extraction with node-html-parser
+// ULTIMATE content extraction with node-html-parser (UNCHANGED)
 async function extractContentUltimate(html) {
   const root = parse(html);
 
@@ -400,54 +401,6 @@ async function extractContentUltimate(html) {
       extractedLength: extractedContent.length
     }
   };
-}
-
-// Enhanced content chunking and summarization
-async function chunkAndSummarize(content, aiBinding) {
-  const CHUNK_SIZE = 6000;
-  const chunks = [];
-  
-  for (let i = 0; i < content.length; i += CHUNK_SIZE) {
-    chunks.push(content.substring(i, i + CHUNK_SIZE));
-  }
-  
-  if (chunks.length === 1) return content;
-  
-  console.log(`Chunking content into ${chunks.length} parts for summarization`);
-  
-  const summaries = [];
-  for (let i = 0; i < Math.min(chunks.length, 3); i++) { // Limit to 3 chunks for performance
-    try {
-      const summaryResponse = await aiBinding.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
-        messages: [
-          {
-            role: 'system',
-            content: 'You are an expert content summarizer. Preserve all important business information, features, services, and key details.'
-          },
-          {
-            role: 'user',
-            content: `Summarize this content section while preserving all important business information, services, features, benefits, contact details, and key facts:
-
-${chunks[i]}
-
-Provide a comprehensive summary that retains all important details for FAQ generation:`
-          }
-        ],
-        temperature: 0.2,
-        max_tokens: 1024
-      });
-
-      const summary = typeof summaryResponse.response === 'string' ? 
-        summaryResponse.response : summaryResponse.response.text || '';
-      
-      if (summary) summaries.push(summary);
-    } catch (error) {
-      console.error(`Summarization failed for chunk ${i}:`, error);
-      summaries.push(chunks[i].substring(0, 1500) + '...');
-    }
-  }
-  
-  return summaries.join(' ');
 }
 
 // Enhanced JSON response cleaning
