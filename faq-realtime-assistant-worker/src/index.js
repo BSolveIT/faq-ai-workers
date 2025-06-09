@@ -2,6 +2,7 @@
  * FAQ Realtime Assistant Worker
  * Uses TinyLlama for instant, lightweight suggestions while typing
  * Optimized for speed and low neuron usage (1 neuron per request)
+ * Updated to use JSON responses for consistency with other workers
  */
 
 export default {
@@ -41,27 +42,48 @@ export default {
         });
       }
 
-      // Create prompt based on mode
+      // Create prompt based on mode - now requesting JSON responses
       let prompt;
       if (mode === 'improve') {
-        prompt = `Improve this FAQ question for clarity and SEO. Original: "${question}". Give 3 short improvements. Format: 1. [improvement] 2. [improvement] 3. [improvement]`;
+        prompt = `Improve this FAQ question for clarity and SEO. Original: "${question}". 
+
+Return ONLY a JSON object with this exact structure:
+{
+  "suggestions": ["improved version 1", "improved version 2", "improved version 3"]
+}
+
+Make each suggestion a complete, improved version of the question. Be concise and focus on SEO and clarity.`;
       } else if (mode === 'autocomplete') {
-        prompt = `Complete this FAQ question: "${question}". Give 1 natural completion. Be concise.`;
+        prompt = `Complete this FAQ question: "${question}". 
+
+Return ONLY a JSON object with this exact structure:
+{
+  "suggestions": ["completed question"]
+}
+
+Provide one natural, complete version of the question.`;
       } else {
-        prompt = `Is this a good FAQ question: "${question}"? Give 1 brief SEO tip.`;
+        prompt = `Analyze this FAQ question for SEO: "${question}". 
+
+Return ONLY a JSON object with this exact structure:
+{
+  "suggestions": ["brief SEO tip"]
+}
+
+Give one specific, actionable SEO improvement tip.`;
       }
 
       // Call TinyLlama AI model
       const response = await env.AI.run('@cf/tinyllama/tinyllama-1.1b-chat-v1.0', {
         messages: [
-          { role: 'system', content: 'You are a helpful FAQ assistant. Be very concise.' },
+          { role: 'system', content: 'You are a helpful FAQ assistant. Always respond with valid JSON only. Be very concise.' },
           { role: 'user', content: prompt }
         ],
-        max_tokens: 100,
+        max_tokens: 150,
         temperature: 0.3
       });
 
-      // Parse the response
+      // Parse the response using new JSON parsing with fallback
       const suggestions = parseAISuggestions(response.response, mode);
 
       return new Response(JSON.stringify({
@@ -86,24 +108,57 @@ export default {
   },
 };
 
-// Helper function to parse AI responses
+// Updated helper function to parse JSON responses with fallback to text parsing
 function parseAISuggestions(aiResponse, mode) {
   if (!aiResponse) return [];
 
+  console.log('AI Response:', aiResponse);
+
+  // Try JSON parsing first
+  try {
+    // Clean the response - remove any text before/after JSON
+    let cleanResponse = aiResponse.trim();
+    
+    // Find JSON object boundaries
+    const jsonStart = cleanResponse.indexOf('{');
+    const jsonEnd = cleanResponse.lastIndexOf('}');
+    
+    if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+      const jsonString = cleanResponse.substring(jsonStart, jsonEnd + 1);
+      const parsed = JSON.parse(jsonString);
+      
+      if (parsed.suggestions && Array.isArray(parsed.suggestions)) {
+        console.log('Successfully parsed JSON response');
+        return parsed.suggestions.filter(s => s && s.trim()).slice(0, 3);
+      }
+    }
+  } catch (error) {
+    console.log('JSON parsing failed, falling back to text parsing:', error.message);
+  }
+
+  // Fallback to original text parsing methods
+  console.log('Using fallback text parsing for mode:', mode);
+
   if (mode === 'improve') {
-    // Extract numbered suggestions
+    // Extract numbered suggestions (original method)
     const matches = aiResponse.match(/\d\.\s*([^0-9]+?)(?=\d\.|$)/g);
     if (matches) {
       return matches.map(match => match.replace(/^\d\.\s*/, '').trim());
     }
+    
+    // Alternative: try to split by common delimiters
+    const lines = aiResponse.split(/[\n\r]+/).filter(line => line.trim());
+    if (lines.length > 1) {
+      return lines.slice(0, 3).map(line => line.replace(/^[-*•]\s*/, '').trim());
+    }
   } else if (mode === 'autocomplete') {
-    // Return as single suggestion
+    // Return as single suggestion (original method)
     return [aiResponse.trim()];
   } else {
-    // SEO tip - return as is
+    // SEO tip - return as is (original method)
     return [aiResponse.trim()];
   }
 
-  // Fallback
+  // Final fallback
   return [aiResponse.trim()];
 }
