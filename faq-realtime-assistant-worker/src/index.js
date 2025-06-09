@@ -1,8 +1,8 @@
 /**
  * FAQ Realtime Assistant Worker
- * Uses TinyLlama for instant, lightweight suggestions while typing
+ * Uses Llama 3.2 1B for instant, lightweight suggestions while typing
  * Optimized for speed and low neuron usage (1 neuron per request)
- * Updated to use JSON responses for consistency with other workers
+ * Updated to use the fastest smart model available
  */
 
 export default {
@@ -42,44 +42,32 @@ export default {
         });
       }
 
-      // Create prompt based on mode - now requesting JSON responses
+      // Create prompt based on mode - ultra-explicit for question variations only
       let prompt;
       if (mode === 'improve') {
-        prompt = `Improve this FAQ question for clarity and SEO. Original: "${question}". 
+        prompt = `Rewrite this QUESTION in 3 different ways. Only give me the questions, nothing else:
+Original question: "${question}"
 
-Return ONLY a JSON object with this exact structure:
-{
-  "suggestions": ["improved version 1", "improved version 2", "improved version 3"]
-}
+1. [Question version 1]
+2. [Question version 2]
+3. [Question version 3]
 
-Make each suggestion a complete, improved version of the question. Be concise and focus on SEO and clarity.`;
+Remember: Only questions, no answers or explanations.`;
       } else if (mode === 'autocomplete') {
-        prompt = `Complete this FAQ question: "${question}". 
-
-Return ONLY a JSON object with this exact structure:
-{
-  "suggestions": ["completed question"]
-}
-
-Provide one natural, complete version of the question.`;
+        prompt = `Complete this question: "${question}"
+Just give me the completed question, nothing else.`;
       } else {
-        prompt = `Analyze this FAQ question for SEO: "${question}". 
-
-Return ONLY a JSON object with this exact structure:
-{
-  "suggestions": ["brief SEO tip"]
-}
-
-Give one specific, actionable SEO improvement tip.`;
+        prompt = `Give one short SEO tip for this question: "${question}"
+Just the tip, nothing else.`;
       }
 
-      // Call TinyLlama AI model
-      const response = await env.AI.run('@cf/tinyllama/tinyllama-1.1b-chat-v1.0', {
+      // Call Llama 3.2 1B AI model - fastest smart model available
+      const response = await env.AI.run('@cf/meta/llama-3.2-1b-instruct', {
         messages: [
-          { role: 'system', content: 'You are a helpful FAQ assistant. Always respond with valid JSON only. Be very concise.' },
+          { role: 'system', content: 'You help rewrite FAQ questions. When asked to improve a question, only provide alternative question phrasings - never provide answers or explanations. Be concise.' },
           { role: 'user', content: prompt }
         ],
-        max_tokens: 150,
+        max_tokens: 100,
         temperature: 0.3
       });
 
@@ -108,57 +96,106 @@ Give one specific, actionable SEO improvement tip.`;
   },
 };
 
-// Updated helper function to parse JSON responses with fallback to text parsing
+// Updated helper function - prioritizes question extraction for realtime assistance
 function parseAISuggestions(aiResponse, mode) {
   if (!aiResponse) return [];
 
   console.log('AI Response:', aiResponse);
 
-  // Try JSON parsing first
-  try {
-    // Clean the response - remove any text before/after JSON
-    let cleanResponse = aiResponse.trim();
-    
-    // Find JSON object boundaries
-    const jsonStart = cleanResponse.indexOf('{');
-    const jsonEnd = cleanResponse.lastIndexOf('}');
-    
-    if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
-      const jsonString = cleanResponse.substring(jsonStart, jsonEnd + 1);
-      const parsed = JSON.parse(jsonString);
-      
-      if (parsed.suggestions && Array.isArray(parsed.suggestions)) {
-        console.log('Successfully parsed JSON response');
-        return parsed.suggestions.filter(s => s && s.trim()).slice(0, 3);
-      }
+  // Clean the response first
+  let cleaned = aiResponse.trim();
+  
+  // Remove common prefixes that might confuse parsing
+  const prefixes = ['Here are', 'Here\'s', 'The questions are', 'Questions:', 'Response:', 'Sure!', 'Here you go'];
+  for (const prefix of prefixes) {
+    if (cleaned.toLowerCase().startsWith(prefix.toLowerCase())) {
+      cleaned = cleaned.substring(prefix.length).trim();
     }
-  } catch (error) {
-    console.log('JSON parsing failed, falling back to text parsing:', error.message);
   }
 
-  // Fallback to original text parsing methods
-  console.log('Using fallback text parsing for mode:', mode);
-
   if (mode === 'improve') {
-    // Extract numbered suggestions (original method)
-    const matches = aiResponse.match(/\d\.\s*([^0-9]+?)(?=\d\.|$)/g);
-    if (matches) {
-      return matches.map(match => match.replace(/^\d\.\s*/, '').trim());
+    // Primary method: Extract numbered suggestions
+    const matches = cleaned.match(/\d\.\s*([^0-9\n\r]+?)(?=\d\.|$)/g);
+    if (matches && matches.length > 0) {
+      console.log('Found numbered suggestions');
+      const questions = matches.map(match => {
+        let question = match.replace(/^\d\.\s*/, '').trim();
+        // Remove any markdown or formatting
+        question = question.replace(/\*\*/g, '').replace(/\*/g, '');
+        // Clean up brackets
+        question = question.replace(/^\[/, '').replace(/\]$/, '');
+        return question;
+      }).filter(q => {
+        // Only keep strings that look like questions
+        return q.length > 5 && 
+               q.length < 200 && 
+               !q.includes('Definition:') && 
+               !q.includes('Answer:') && 
+               !q.includes('**') &&
+               !q.includes('Search Engine Optimization') &&
+               q.split(' ').length < 20; // Reasonable question length
+      }).slice(0, 3);
+      
+      if (questions.length > 0) {
+        return questions;
+      }
     }
     
-    // Alternative: try to split by common delimiters
-    const lines = aiResponse.split(/[\n\r]+/).filter(line => line.trim());
-    if (lines.length > 1) {
-      return lines.slice(0, 3).map(line => line.replace(/^[-*•]\s*/, '').trim());
+    // Fallback: Split by lines and filter for question-like content
+    const lines = cleaned.split(/[\n\r]+/).filter(line => {
+      const trimmed = line.trim();
+      return trimmed.length > 5 && 
+             trimmed.length < 200 &&
+             !trimmed.toLowerCase().includes('definition') && 
+             !trimmed.toLowerCase().includes('answer') &&
+             !trimmed.includes('**') &&
+             !trimmed.includes('{') &&
+             trimmed.split(' ').length < 20;
+    });
+    
+    if (lines.length > 0) {
+      console.log('Using line-based parsing');
+      return lines.slice(0, 3).map(line => {
+        let clean = line.replace(/^[-*•]\s*/, '').trim();
+        clean = clean.replace(/^\[/, '').replace(/\]$/, '');
+        return clean;
+      });
     }
+    
   } else if (mode === 'autocomplete') {
-    // Return as single suggestion (original method)
-    return [aiResponse.trim()];
+    // For autocomplete, return the first clean line that looks like a question
+    const lines = cleaned.split(/[\n\r]+/).filter(line => {
+      const trimmed = line.trim();
+      return trimmed.length > 5 && 
+             trimmed.length < 200 &&
+             !trimmed.toLowerCase().includes('json') &&
+             trimmed.split(' ').length < 20;
+    });
+    
+    if (lines.length > 0) {
+      let question = lines[0].replace(/^[-*•]\s*/, '').trim();
+      question = question.replace(/^\[/, '').replace(/\]$/, '');
+      return [question];
+    }
+    
+    return [cleaned];
+    
   } else {
-    // SEO tip - return as is (original method)
-    return [aiResponse.trim()];
+    // For validation/tips, return the main content
+    const lines = cleaned.split(/[\n\r]+/).filter(line => {
+      const trimmed = line.trim();
+      return trimmed.length > 5 && 
+             trimmed.length < 200 &&
+             !trimmed.toLowerCase().includes('json');
+    });
+    
+    if (lines.length > 0) {
+      return [lines[0].trim()];
+    }
+    
+    return [cleaned];
   }
 
   // Final fallback
-  return [aiResponse.trim()];
+  return ['Unable to generate suggestions'];
 }
