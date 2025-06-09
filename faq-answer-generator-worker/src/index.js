@@ -1,9 +1,8 @@
 /**
  * FAQ Answer Generator Worker
- * Uses Llama 3 for comprehensive answer generation and improvement
- * Optimized for quality content creation (2 neurons per request)
- * 
- * Copy this complete code into your src/index.js file
+ * Uses Llama 4 Scout 17B (MoE) for comprehensive answer generation and improvement
+ * Latest generation model with Mixture of Experts architecture (~3-5 neurons per request)
+ * Updated to use the newest, most capable model available
  */
 
 export default {
@@ -50,11 +49,11 @@ export default {
         });
       }
 
-      // Create prompt based on mode and context
+      // Create prompt based on mode and context - now requesting JSON responses
       const prompt = createPrompt(mode, question, existingAnswer, tone, context, industry);
 
-      // Call Llama 3 AI model (2 neurons per request)
-      const response = await env.AI.run('@cf/meta/llama-3-8b-instruct', {
+      // Call Llama 4 Scout AI model (Mixture of Experts - estimated 3-5 neurons per request)
+      const response = await env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
         messages: [
           { 
             role: 'system', 
@@ -65,24 +64,24 @@ export default {
             content: prompt 
           }
         ],
-        max_tokens: mode === 'expand' ? 400 : 300,
-        temperature: tone === 'creative' ? 0.7 : 0.4
+        max_tokens: mode === 'expand' ? 600 : 500,
+        temperature: tone === 'creative' ? 0.8 : 0.3
       });
 
-      // Process the AI response
-      const processedAnswer = processAIResponse(response.response, mode);
+      // Process the AI response using new JSON parsing with fallback
+      const result = processAIResponse(response.response, mode);
 
       // Calculate metrics for the answer
-      const metrics = calculateAnswerMetrics(processedAnswer, question);
+      const metrics = calculateAnswerMetrics(result.answer, question);
 
       return new Response(JSON.stringify({
         success: true,
         question: question,
         mode: mode,
         tone: tone,
-        answer: processedAnswer,
+        answer: result.answer,
         metrics: metrics,
-        suggestions: generateSuggestions(processedAnswer, mode)
+        suggestions: result.suggestions || generateSuggestions(result.answer, mode)
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
@@ -101,28 +100,28 @@ export default {
   },
 };
 
-// System prompts for different modes and tones
+// Updated system prompts for Llama 4 Scout's advanced capabilities
 function getSystemPrompt(mode, tone) {
-  const basePrompt = "You are an expert FAQ content writer who creates clear, helpful, and SEO-optimized answers.";
+  const basePrompt = "You are an expert FAQ content writer with advanced SEO knowledge. You create clear, helpful, and highly optimized answers. Always respond with valid JSON only, following the exact structure requested.";
   
   const modeInstructions = {
-    generate: "Generate comprehensive answers that directly address the question. Include relevant details and maintain clarity.",
-    expand: "Expand existing content by adding more detail, context, or examples while maintaining the original meaning.",
-    examples: "Add concrete, relevant examples to make the content more practical and understandable.",
-    tone: "Adjust the tone and style while preserving all important information."
+    generate: "Generate comprehensive, SEO-optimized answers that directly address the question with relevant details and clear structure.",
+    expand: "Intelligently expand existing content by adding valuable details, context, examples, and related information while maintaining the original meaning.",
+    examples: "Add concrete, relevant, and practical examples that enhance understanding and provide real-world context.",
+    tone: "Expertly adjust tone and style while preserving all important information and maintaining content quality."
   };
 
   const toneInstructions = {
-    professional: "Use a professional, business-appropriate tone. Be formal but approachable.",
-    casual: "Use a friendly, conversational tone. Be approachable and easy to understand.",
-    technical: "Use precise technical language appropriate for knowledgeable audiences.",
-    creative: "Use an engaging, creative tone that captures attention while remaining informative."
+    professional: "Use a professional, authoritative tone that builds trust. Be formal yet accessible, with clear and confident language.",
+    casual: "Use a friendly, conversational tone that feels natural and approachable. Be engaging while remaining informative.",
+    technical: "Use precise technical language appropriate for knowledgeable audiences. Include relevant terminology and detailed explanations.",
+    creative: "Use an engaging, creative tone that captures attention while remaining accurate and informative. Be memorable and distinctive."
   };
 
   return `${basePrompt} ${modeInstructions[mode] || modeInstructions.generate} ${toneInstructions[tone] || toneInstructions.professional}`;
 }
 
-// Create specific prompts for different modes
+// Updated prompts to request JSON responses
 function createPrompt(mode, question, existingAnswer, tone, context, industry) {
   const contextInfo = context ? `Context: ${context}\n` : '';
   const industryInfo = industry ? `Industry: ${industry}\n` : '';
@@ -131,69 +130,120 @@ function createPrompt(mode, question, existingAnswer, tone, context, industry) {
     case 'generate':
       return `${contextInfo}${industryInfo}Question: "${question}"
 
-Create a comprehensive FAQ answer that:
+Create a comprehensive FAQ answer. Return ONLY a JSON object with this exact structure:
+{
+  "answer": "your generated answer here (50-300 characters for SEO)",
+  "suggestions": ["writing tip 1", "SEO tip 2", "improvement tip 3"]
+}
+
+Requirements for the answer:
 - Directly answers the question
-- Is 50-300 characters for SEO optimization
+- 50-300 characters for SEO optimization
 - Uses clear, accessible language
 - Includes relevant details
-- Is structured for easy reading
-
-Answer:`;
+- Is structured for easy reading`;
 
     case 'expand':
       return `${contextInfo}${industryInfo}Question: "${question}"
 Current Answer: "${existingAnswer}"
 
-Expand this answer by:
+Expand this answer. Return ONLY a JSON object with this exact structure:
+{
+  "answer": "your expanded answer here",
+  "suggestions": ["expansion tip 1", "detail tip 2", "improvement tip 3"]
+}
+
+Expand by:
 - Adding more relevant details
 - Including additional context
 - Providing more comprehensive information
 - Maintaining clarity and readability
-- Keeping the core message intact
-
-Expanded Answer:`;
+- Keeping the core message intact`;
 
     case 'examples':
       return `${contextInfo}${industryInfo}Question: "${question}"
 Current Answer: "${existingAnswer}"
 
-Add concrete, relevant examples to this answer:
+Add concrete examples to this answer. Return ONLY a JSON object with this exact structure:
+{
+  "answer": "your answer with examples integrated",
+  "suggestions": ["example tip 1", "improvement tip 2", "clarity tip 3"]
+}
+
+Requirements:
 - Include 2-3 specific examples
 - Make examples realistic and practical
 - Integrate examples naturally into the content
-- Maintain the original answer's structure
-
-Answer with Examples:`;
+- Maintain the original answer's structure`;
 
     case 'tone':
       return `${contextInfo}${industryInfo}Question: "${question}"
 Current Answer: "${existingAnswer}"
 Target Tone: ${tone}
 
-Rewrite this answer to match the target tone while:
-- Preserving all important information
-- Maintaining accuracy and clarity
-- Adapting language style appropriately
-- Keeping the same level of detail
+Rewrite this answer to match the target tone. Return ONLY a JSON object with this exact structure:
+{
+  "answer": "your tone-adjusted answer",
+  "suggestions": ["tone tip 1", "style tip 2", "improvement tip 3"]
+}
 
-Rewritten Answer:`;
+Requirements:
+- Preserve all important information
+- Maintain accuracy and clarity
+- Adapt language style appropriately
+- Keep the same level of detail`;
 
     default:
-      return `${contextInfo}${industryInfo}Create a helpful FAQ answer for: "${question}"`;
+      return `${contextInfo}${industryInfo}Create a helpful FAQ answer for: "${question}"
+
+Return ONLY a JSON object with this exact structure:
+{
+  "answer": "your answer here",
+  "suggestions": ["tip 1", "tip 2", "tip 3"]
+}`;
   }
 }
 
-// Process AI response based on mode
+// Updated to parse JSON responses with fallback to text processing
 function processAIResponse(aiResponse, mode) {
-  if (!aiResponse) return '';
+  if (!aiResponse) return { answer: '', suggestions: [] };
 
-  // Clean up the response
+  console.log('AI Response:', aiResponse);
+
+  // Try JSON parsing first
+  try {
+    // Clean the response - remove any text before/after JSON
+    let cleanResponse = aiResponse.trim();
+    
+    // Find JSON object boundaries
+    const jsonStart = cleanResponse.indexOf('{');
+    const jsonEnd = cleanResponse.lastIndexOf('}');
+    
+    if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
+      const jsonString = cleanResponse.substring(jsonStart, jsonEnd + 1);
+      const parsed = JSON.parse(jsonString);
+      
+      if (parsed.answer) {
+        console.log('Successfully parsed JSON response');
+        return {
+          answer: cleanAnswer(parsed.answer),
+          suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.slice(0, 3) : []
+        };
+      }
+    }
+  } catch (error) {
+    console.log('JSON parsing failed, falling back to text parsing:', error.message);
+  }
+
+  // Fallback to original text processing methods
+  console.log('Using fallback text processing for mode:', mode);
+  
   let processed = aiResponse.trim();
 
   // Remove common AI prefixes
   const prefixes = [
     'Answer:', 'Expanded Answer:', 'Answer with Examples:', 'Rewritten Answer:',
-    'Here\'s', 'Here is', 'The answer is', 'A:', 'Response:'
+    'Here\'s', 'Here is', 'The answer is', 'A:', 'Response:', 'Sure!', 'Certainly!'
   ];
 
   for (const prefix of prefixes) {
@@ -202,149 +252,92 @@ function processAIResponse(aiResponse, mode) {
     }
   }
 
-  // Clean up markdown-style formatting for HTML
-  processed = processed
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
-    .replace(/\*(.*?)\*/g, '<em>$1</em>') // Italic
-    .replace(/^\- (.+)$/gm, '<li>$1</li>') // List items
-    .replace(/^(\d+)\. (.+)$/gm, '<li>$1. $2</li>'); // Numbered lists
-
-  // Wrap list items in ul tags if we have any
-  if (processed.includes('<li>')) {
-    // Check if it's numbered or bulleted
-    const hasNumbered = /^\d+\./.test(processed);
-    const listTag = hasNumbered ? 'ol' : 'ul';
-    
-    processed = processed.replace(/(<li>.*<\/li>)/gs, `<${listTag}>$1</${listTag}>`);
-  }
-
-  // Ensure paragraphs for longer content
-  if (processed.length > 100 && !processed.includes('<p>') && !processed.includes('<li>')) {
-    // Split into paragraphs at double line breaks
-    const paragraphs = processed.split('\n\n').filter(p => p.trim());
-    if (paragraphs.length > 1) {
-      processed = paragraphs.map(p => `<p>${p.trim()}</p>`).join('');
-    } else {
-      processed = `<p>${processed}</p>`;
-    }
-  }
-
-  return processed;
-}
-
-// Calculate metrics for the generated answer
-function calculateAnswerMetrics(answer, question) {
-  const plainText = answer.replace(/<[^>]*>/g, ''); // Strip HTML
-  const wordCount = plainText.trim().split(/\s+/).length;
-  const charCount = plainText.length;
-  
-  // SEO score calculation
-  let seoScore = 50; // Base score
-  
-  // Length optimization (50-300 chars is optimal)
-  if (charCount >= 50 && charCount <= 300) {
-    seoScore += 20;
-  } else if (charCount > 300 && charCount <= 500) {
-    seoScore += 10;
-  } else if (charCount < 50) {
-    seoScore -= 15;
-  }
-  
-  // Word count optimization (10+ words is good)
-  if (wordCount >= 10) {
-    seoScore += 15;
-  } else {
-    seoScore -= 10;
-  }
-  
-  // Structure bonus (lists, paragraphs)
-  if (answer.includes('<li>') || answer.includes('<p>')) {
-    seoScore += 10;
-  }
-  
-  // Bold text bonus (helps with featured snippets)
-  if (answer.includes('<strong>')) {
-    seoScore += 5;
-  }
-  
-  // Cap the score
-  seoScore = Math.min(100, Math.max(0, seoScore));
+  // Clean up the text response
+  const cleanedAnswer = cleanAnswer(processed);
   
   return {
-    wordCount,
-    charCount,
-    seoScore,
-    readabilityLevel: getReadabilityLevel(plainText),
-    structureScore: getStructureScore(answer)
+    answer: cleanedAnswer,
+    suggestions: generateSuggestions(cleanedAnswer, mode)
   };
 }
 
-// Calculate readability level
-function getReadabilityLevel(text) {
-  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0);
-  const words = text.trim().split(/\s+/);
-  const avgWordsPerSentence = words.length / sentences.length;
+// Helper function to clean and format answers
+function cleanAnswer(answer) {
+  if (!answer) return '';
+
+  let cleaned = answer.trim();
+
+  // Clean up markdown-style formatting for HTML
+  cleaned = cleaned
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
+    .replace(/\*(.*?)\*/g, '<em>$1</em>') // Italic
+    .replace(/^\- (.+)$/gm, '<li>$1</li>') // List items
+    .replace(/^(\d+)\. (.+)$/gm, '<li>$1. $2</li>'); // Numbered list items
+
+  // Wrap list items in ul tags if present
+  if (cleaned.includes('<li>')) {
+    cleaned = cleaned.replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>');
+  }
+
+  // Remove any JSON artifacts
+  cleaned = cleaned.replace(/[{}]/g, '').replace(/"/g, '');
   
-  if (avgWordsPerSentence <= 15) return 'Easy';
-  if (avgWordsPerSentence <= 20) return 'Medium';
-  return 'Complex';
+  // Limit length (reasonable for FAQ answers)
+  if (cleaned.length > 1000) {
+    cleaned = cleaned.substring(0, 1000) + '...';
+  }
+
+  return cleaned;
 }
 
-// Calculate structure score
-function getStructureScore(html) {
-  let score = 60; // Base score
+// Calculate answer metrics for quality assessment
+function calculateAnswerMetrics(answer, question) {
+  const answerLength = answer.length;
+  const wordCount = answer.split(/\s+/).length;
+  const readabilityScore = Math.max(0, Math.min(100, 100 - (answerLength - 200) / 10));
   
-  if (html.includes('<p>')) score += 10; // Paragraphs
-  if (html.includes('<li>')) score += 15; // Lists
-  if (html.includes('<strong>')) score += 10; // Bold text
-  if (html.includes('<em>')) score += 5; // Emphasis
-  
-  return Math.min(100, score);
+  return {
+    characterCount: answerLength,
+    wordCount: wordCount,
+    readabilityScore: Math.round(readabilityScore),
+    seoOptimized: answerLength >= 50 && answerLength <= 300,
+    hasFormatting: answer.includes('<') || answer.includes('*'),
+    estimatedReadingTime: Math.ceil(wordCount / 200) // minutes
+  };
 }
 
-// Generate improvement suggestions
+// Generate helpful suggestions based on content and mode
 function generateSuggestions(answer, mode) {
   const suggestions = [];
-  const plainText = answer.replace(/<[^>]*>/g, '');
-  const charCount = plainText.length;
-  const wordCount = plainText.trim().split(/\s+/).length;
   
-  // Length suggestions
-  if (charCount < 50) {
-    suggestions.push({
-      type: 'length',
-      priority: 'high',
-      message: 'Answer is too short. Add more detail to reach 50-300 characters for better SEO.',
-      action: 'expand'
-    });
-  } else if (charCount > 500) {
-    suggestions.push({
-      type: 'length',
-      priority: 'medium',
-      message: 'Answer is quite long. Consider breaking into multiple FAQs or using bullet points.',
-      action: 'restructure'
-    });
+  if (mode === 'generate') {
+    suggestions.push('Consider adding specific examples to make the answer more concrete');
+    suggestions.push('Include relevant keywords for better SEO performance');
+    suggestions.push('Structure the answer with bullet points for better readability');
+  } else if (mode === 'expand') {
+    suggestions.push('Add statistics or data to support your points');
+    suggestions.push('Include step-by-step instructions if applicable');
+    suggestions.push('Consider adding related resources or links');
+  } else if (mode === 'examples') {
+    suggestions.push('Make examples more specific to your industry');
+    suggestions.push('Add real-world scenarios that users can relate to');
+    suggestions.push('Include both positive and negative examples for clarity');
+  } else if (mode === 'tone') {
+    suggestions.push('Ensure the tone matches your brand voice consistently');
+    suggestions.push('Consider your target audience when adjusting tone');
+    suggestions.push('Balance professionalism with approachability');
   }
   
-  // Structure suggestions
-  if (!answer.includes('<li>') && wordCount > 20) {
-    suggestions.push({
-      type: 'structure',
-      priority: 'medium',
-      message: 'Consider using bullet points or numbered lists for better readability.',
-      action: 'examples'
-    });
+  // Add general suggestions based on answer analysis
+  if (answer.length < 50) {
+    suggestions.push('Answer is quite short - consider adding more detail');
+  }
+  if (answer.length > 300) {
+    suggestions.push('Answer is quite long - consider breaking into smaller sections');
+  }
+  if (!answer.includes('<')) {
+    suggestions.push('Consider adding formatting like bold or lists for better readability');
   }
   
-  // SEO suggestions
-  if (!answer.includes('<strong>')) {
-    suggestions.push({
-      type: 'seo',
-      priority: 'low',
-      message: 'Add bold text to highlight key points for better featured snippet chances.',
-      action: 'tone'
-    });
-  }
-  
-  return suggestions;
+  return suggestions.slice(0, 3); // Return max 3 suggestions
 }
