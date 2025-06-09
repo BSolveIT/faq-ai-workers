@@ -1,0 +1,17 @@
+{
+  "name": "url-to-faq-generator-worker",
+  "compatibility_date": "2024-12-19",
+  "main": "src/index.js",
+  "ai": {
+    "binding": "AI"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "FAQ_RATE_LIMITS",
+      "id": "77fcd59503e34efcaf4d77d1a550433b"
+    }
+  ],
+  "limits": {
+    "cpu_ms": 60000
+  }
+}
