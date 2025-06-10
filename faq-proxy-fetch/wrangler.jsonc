@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "faq-proxy-fetch", 
+  "main": "src/index.js",
+  "compatibility_date": "2025-06-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  
+  // KV namespace for rate limiting (same as legacy worker)
+  "kv_namespaces": [
+    {
+      "binding": "FAQ_RATE_LIMITS",
+      "id": "77fcd59503e34efcaf4d77d1a550433b",
+      "preview_id": "77fcd59503e34efcaf4d77d1a550433b"
+    }
+  ]
+}
