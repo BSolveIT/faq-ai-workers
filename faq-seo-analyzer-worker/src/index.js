@@ -1,26 +1,21 @@
-/**
- * FAQ SEO Analyzer Worker
- * Uses Llama 3.1 8B Fast for comprehensive SEO analysis and optimization
- * Optimized for speed and practical usage (2 neurons per request)
- * Updated to use fast model for real-world multiple FAQ analysis
- */
+// SEO Analyzer Worker - AI-Powered with Expert-Level Analysis
+// Uses Llama 4 Scout 17B 16E Instruct for superior SEO comprehension and Position Zero analysis
 
 export default {
   async fetch(request, env, ctx) {
-    // CORS headers for cross-origin requests
+    // CORS headers
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
-      'Access-Control-Max-Age': '86400',
     };
 
-    // Handle CORS preflight
+    // Handle preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
     }
 
-    // Only accept POST requests
+    // Only accept POST
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { 
         status: 405,
@@ -29,324 +24,431 @@ export default {
     }
 
     try {
-      // Parse request body
-      const { 
-        question, 
-        answer = '', 
-        mode = 'comprehensive',
-        keywords = '',
-        industry = '',
-        targetAudience = 'general'
-      } = await request.json();
+      // Parse request
+      const { question, answer, pageUrl } = await request.json();
+      
+      console.log('SEO Analysis Request:', { 
+        questionLength: question?.length, 
+        answerLength: answer?.length,
+        pageUrl
+      });
 
-      if (!question || question.trim().length < 3) {
+      // Validate input
+      if (!question || !answer) {
         return new Response(JSON.stringify({
-          error: 'Question is required and must be at least 3 characters',
-          analysis: null
+          error: 'Question and answer are required',
+          seoScore: 0,
+          readabilityScore: 0,
+          voiceSearchScore: 0
         }), {
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
 
-      // Create analysis prompt
-      const prompt = createAnalysisPrompt(mode, question, answer, keywords, industry, targetAudience);
+      // Expert-level AI prompt with detailed instructions
+      const analysisPrompt = `You are a senior Google Search Quality Rater and SEO expert with 15 years of experience. You understand exactly how Google ranks content for Featured Snippets (Position Zero), People Also Ask boxes, and voice search results.
 
-      // Call Llama 3.1 8B Fast AI model (2 neurons per request)
-      const response = await env.AI.run('@cf/meta/llama-3.1-8b-instruct-fast', {
+ANALYZE THIS FAQ:
+Question: "${question}"
+Answer: "${answer}"
+${pageUrl ? `Page URL: ${pageUrl}` : ''}
+
+YOUR TASK: Score this FAQ for its potential to rank in Google Search, win Featured Snippets, and appear in AI-generated answers.
+
+SCORING CRITERIA:
+
+1. SEO SCORE (0-100) - Position Zero & Featured Snippet Potential:
+   
+   PERFECT (90-100): 
+   - Question matches high-volume search queries exactly
+   - Answer starts with a 40-250 character direct response
+   - Contains the question keywords naturally in the answer
+   - Includes related entities and LSI keywords
+   - Perfect length for Featured Snippets (40-60 words ideal)
+   - Example: "What is SEO?" with answer starting "SEO (Search Engine Optimization) is the practice of improving website visibility in search results..."
+   
+   EXCELLENT (80-89):
+   - Strong keyword match with minor variations
+   - Good direct answer but slightly too long/short
+   - Most LSI keywords present
+   
+   GOOD (70-79):
+   - Decent keyword usage but missing opportunities
+   - Answer addresses question but not immediately
+   
+   AVERAGE (50-69):
+   - Basic keyword presence
+   - Answer eventually addresses question
+   
+   POOR (0-49):
+   - Vague question or keyword stuffing
+   - Answer doesn't clearly address question
+   - Too short (<20 words) or too long (>500 words)
+
+2. READABILITY SCORE (0-100) - Google's E-A-T and User Experience:
+   
+   PERFECT (90-100):
+   - 8th-grade reading level (Flesch-Kincaid)
+   - Sentences under 20 words
+   - Active voice throughout
+   - Clear structure with natural flow
+   - Example: Short sentences. Clear points. Easy to scan.
+   
+   EXCELLENT (80-89):
+   - 9th-10th grade reading level
+   - Mostly short sentences
+   - Minimal passive voice
+   
+   GOOD (70-79):
+   - 11th-12th grade level
+   - Some long sentences but clear
+   
+   AVERAGE (50-69):
+   - College level language
+   - Complex sentence structures
+   
+   POOR (0-49):
+   - Graduate level complexity
+   - Jargon without explanation
+   - Run-on sentences
+
+3. VOICE SEARCH SCORE (0-100) - Google Assistant & Alexa Optimization:
+   
+   PERFECT (90-100):
+   - Conversational question (how, what, where, when)
+   - Answer starts with direct 1-2 sentence response
+   - Uses "you" and natural language
+   - Speakable answer under 30 seconds
+   - Example: "How do I tie a tie?" → "To tie a tie, start by..."
+   
+   EXCELLENT (80-89):
+   - Natural question format
+   - Quick answer but slightly formal
+   
+   GOOD (70-79):
+   - Decent conversational tone
+   - Answer a bit too long for voice
+   
+   AVERAGE (50-69):
+   - Formal language but clear
+   - Would need editing for voice
+   
+   POOR (0-49):
+   - Technical/formal question
+   - Answer too complex for voice reading
+
+PROVIDE YOUR ANALYSIS:
+
+Consider:
+- Would this win Position Zero for its target query?
+- Would Google's AI Overview include this answer?
+- Would voice assistants choose this answer?
+- Does it follow Google's Helpful Content guidelines?
+
+Return ONLY a JSON object:
+{
+  "seoScore": [0-100 with reasoning],
+  "readabilityScore": [0-100 with reasoning],
+  "voiceSearchScore": [0-100 with reasoning],
+  "suggestions": [
+    "Specific improvement that would increase Position Zero chances",
+    "Specific change to improve readability score by X points",
+    "Specific optimization for voice search ranking"
+  ],
+  "analysis": {
+    "featuredSnippetPotential": true/false,
+    "positionZeroReady": true/false,
+    "targetKeyword": "identified main keyword",
+    "missingElements": ["what's missing for 100% score"]
+  },
+  "reasoning": {
+    "seo": "Why this score - be specific about Google ranking factors",
+    "readability": "Specific readability issues or strengths",
+    "voiceSearch": "Why it would/wouldn't work for voice"
+  }
+}`;
+
+      // Call AI for expert analysis
+      console.log('Calling Llama 4 Scout 17B 16E for expert SEO analysis...');
+      
+      const aiResponse = await env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
         messages: [
-          { 
-            role: 'system', 
-            content: 'You are an expert SEO analyst who provides comprehensive FAQ optimization advice. Always respond with valid JSON only, following the exact structure requested. Be specific and actionable in your recommendations.'
+          {
+            role: 'system',
+            content: `You are a Google Search Quality Rater with deep knowledge of:
+- Featured Snippets algorithm and Position Zero requirements
+- People Also Ask ranking factors  
+- Voice search optimization for Google Assistant and Alexa
+- E-A-T (Expertise, Authoritativeness, Trustworthiness)
+- Google's Helpful Content Update and Core Web Vitals
+- BERT and natural language understanding
+- RankBrain and semantic search
+
+Analyze FAQs as if determining their Google ranking potential. Your advanced 17B parameter model allows you to provide nuanced, specific scores that reflect real Google ranking likelihood. Be extremely specific with scores and actionable suggestions.`
           },
-          { 
-            role: 'user', 
-            content: prompt 
+          {
+            role: 'user',
+            content: analysisPrompt
           }
         ],
-        max_tokens: 800,
-        temperature: 0.3
+        temperature: 0.3, // Low temperature for consistent expert scoring
+        max_tokens: 1200 // Increased for detailed responses from the 17B model
       });
 
-      // Parse the AI response
-      const analysis = parseAnalysisResponse(response.response, question, answer);
+      console.log('AI Response received');
 
-      return new Response(JSON.stringify({
+      // Parse AI response
+      let aiAnalysis;
+      try {
+        // Extract JSON from response
+        const jsonMatch = aiResponse.response.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          aiAnalysis = JSON.parse(jsonMatch[0]);
+        } else {
+          throw new Error('No JSON found in AI response');
+        }
+      } catch (parseError) {
+        console.error('Failed to parse Llama 4 Scout 17B response:', parseError);
+        console.log('AI Response was:', aiResponse.response);
+        
+        // Fallback to enhanced algorithmic scoring with the data we have
+        return enhancedFallbackScoring(question, answer, pageUrl, corsHeaders);
+      }
+
+      // Validate and sanitize scores
+      const seoScore = Math.max(0, Math.min(100, Math.round(aiAnalysis.seoScore || 50)));
+      const readabilityScore = Math.max(0, Math.min(100, Math.round(aiAnalysis.readabilityScore || 50)));
+      const voiceSearchScore = Math.max(0, Math.min(100, Math.round(aiAnalysis.voiceSearchScore || 50)));
+
+      // Ensure we have suggestions
+      const suggestions = Array.isArray(aiAnalysis.suggestions) 
+        ? aiAnalysis.suggestions.filter(s => s && typeof s === 'string').slice(0, 5)
+        : generateDefaultSuggestions(seoScore, readabilityScore, voiceSearchScore);
+
+      // Build response
+      const response = {
         success: true,
-        question: question,
-        answer: answer,
-        mode: mode,
-        analysis: analysis,
-        timestamp: new Date().toISOString()
-      }), {
+        seoScore,
+        readabilityScore,
+        voiceSearchScore,
+        suggestions,
+        analysis: {
+          questionLength: question.length,
+          answerWordCount: answer.split(/\s+/).length,
+          featuredSnippetPotential: aiAnalysis.analysis?.featuredSnippetPotential ?? (answer.split(/[.!?]/)[0]?.length <= 300),
+          positionZeroReady: aiAnalysis.analysis?.positionZeroReady ?? (seoScore >= 90),
+          targetKeyword: aiAnalysis.analysis?.targetKeyword || extractMainKeyword(question),
+          missingElements: aiAnalysis.analysis?.missingElements || [],
+          aiPowered: true,
+          model: 'llama-4-scout-17b-16e-instruct',
+          neurons: 4,
+          reasoning: aiAnalysis.reasoning || null
+        }
+      };
+
+      console.log('SEO Analysis Response:', response);
+
+      return new Response(JSON.stringify(response), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
 
     } catch (error) {
-      console.error('SEO Analysis Error:', error);
+      console.error('SEO analyzer error:', error);
+      
+      // Return error response
       return new Response(JSON.stringify({
-        error: 'SEO analysis failed',
-        details: error.message,
-        analysis: null
+        error: error.message,
+        seoScore: 0,
+        readabilityScore: 0,
+        voiceSearchScore: 0,
+        suggestions: ['An error occurred during analysis. Please try again.']
       }), {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
-  },
+  }
 };
 
-// Create analysis prompts optimized for Llama 3.1 8B Fast
-function createAnalysisPrompt(mode, question, answer, keywords, industry, targetAudience) {
-  const baseInfo = `Question: "${question}"${answer ? `\nAnswer: "${answer}"` : ''}${keywords ? `\nTarget Keywords: ${keywords}` : ''}${industry ? `\nIndustry: ${industry}` : ''}${targetAudience ? `\nTarget Audience: ${targetAudience}` : ''}`;
-
-  if (mode === 'comprehensive') {
-    return `${baseInfo}
-
-Perform a comprehensive SEO analysis of this FAQ. Return ONLY a JSON object with this exact structure:
-
-{
-  "seoScore": 85,
-  "questionQuality": {
-    "score": 90,
-    "clarity": "High",
-    "seoOptimization": "Good",
-    "naturalLanguage": "Yes"
-  },
-  "answerQuality": {
-    "score": 75,
-    "length": "Appropriate",
-    "structure": "Good",
-    "helpfulness": "Very helpful"
-  },
-  "keywords": ["primary keyword", "secondary keyword", "related term"],
-  "improvements": ["specific improvement 1", "specific improvement 2", "specific improvement 3"],
-  "featuredSnippet": {
-    "potential": "High",
-    "recommendations": ["format tip 1", "content tip 2", "structure tip 3"]
-  },
-  "voiceSearch": {
-    "readiness": "Good",
-    "suggestions": ["voice optimization 1", "natural language tip 2"]
-  },
-  "readability": {
-    "score": 80,
-    "level": "Easy",
-    "suggestions": ["readability tip 1", "clarity improvement 2"]
-  },
-  "recommendations": [
-    {"type": "Keywords", "priority": "High", "action": "specific actionable step"},
-    {"type": "Structure", "priority": "Medium", "action": "specific actionable step"},
-    {"type": "Content", "priority": "Low", "action": "specific actionable step"}
-  ]
-}
-
-Provide specific, actionable insights with realistic scores. Focus on practical improvements that will boost search rankings. Return ONLY valid JSON, no other text.`;
-
-  } else if (mode === 'keywords') {
-    return `${baseInfo}
-
-Analyze keyword optimization for this FAQ. Return ONLY a JSON object with this exact structure:
-
-{
-  "primaryKeywords": ["main keyword", "primary term"],
-  "secondaryKeywords": ["related keyword 1", "related keyword 2"],
-  "longTailKeywords": ["long tail phrase 1", "long tail phrase 2"],
-  "keywordDensity": "Optimal",
-  "searchIntent": "Informational",
-  "difficulty": "Medium",
-  "opportunities": ["keyword opportunity 1", "keyword opportunity 2"],
-  "recommendations": ["keyword action 1", "keyword action 2", "keyword action 3"]
-}
-
-Focus on practical keyword strategies that will improve rankings. Return ONLY valid JSON, no other text.`;
-
-  } else if (mode === 'readability') {
-    return `${baseInfo}
-
-Analyze readability and user experience. Return ONLY a JSON object with this exact structure:
-
-{
-  "readabilityScore": 85,
-  "readingLevel": "Easy",
-  "sentenceLength": "Good",
-  "clarityScore": 90,
-  "voiceSearchOptimized": true,
-  "mobileReadable": true,
-  "scannable": true,
-  "improvements": ["readability improvement 1", "clarity enhancement 2", "structure suggestion 3"]
-}
-
-Focus on making content more accessible and user-friendly. Return ONLY valid JSON, no other text.`;
-
-  } else if (mode === 'competition') {
-    return `${baseInfo}
-
-Perform competitive SEO analysis for this FAQ topic. Return ONLY a JSON object with this exact structure:
-
-{
-  "competitiveScore": 75,
-  "advantages": ["unique advantage 1", "strength 2"],
-  "contentGaps": ["missing element 1", "opportunity 2"],
-  "uniqueValue": "What makes this FAQ distinctive",
-  "rankingPotential": "High",
-  "differentiation": ["how to stand out 1", "competitive edge 2"],
-  "strategies": ["strategy 1", "strategy 2", "strategy 3"]
-}
-
-Focus on competitive positioning and ranking opportunities. Return ONLY valid JSON, no other text.`;
-  }
-
-  // Default comprehensive analysis
-  return `${baseInfo}
-
-Analyze this FAQ for SEO optimization. Return comprehensive analysis as valid JSON with scores, keywords, and specific recommendations. Return ONLY valid JSON, no other text.`;
-}
-
-// Parse AI response into structured analysis object with enhanced JSON handling
-function parseAnalysisResponse(aiResponse, question, answer) {
-  if (!aiResponse) {
-    return createFallbackAnalysis(question, answer);
-  }
-
-  console.log('AI Response received, length:', aiResponse.length);
-
-  try {
-    // Clean the response - remove any text before/after JSON
-    let cleanResponse = aiResponse.trim();
-    
-    // Find JSON object boundaries more precisely
-    const jsonStart = cleanResponse.indexOf('{');
-    const jsonEnd = cleanResponse.lastIndexOf('}');
-    
-    if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
-      const jsonString = cleanResponse.substring(jsonStart, jsonEnd + 1);
-      console.log('Attempting to parse JSON of length:', jsonString.length);
-      
-      const parsed = JSON.parse(jsonString);
-      
-      // Validate that we have the essential structure
-      if (parsed && typeof parsed === 'object') {
-        console.log('Successfully parsed JSON response from Llama 3.1 Fast');
-        
-        // Return structured analysis with validation
-        return {
-          seoScore: Math.min(100, Math.max(0, parsed.seoScore || parsed.competitiveScore || 70)),
-          questionQuality: parsed.questionQuality || {
-            score: 75,
-            clarity: 'Good',
-            seoOptimization: 'Needs review',
-            naturalLanguage: 'Yes'
-          },
-          answerQuality: answer ? (parsed.answerQuality || {
-            score: 70,
-            length: 'Appropriate',
-            structure: 'Good',
-            helpfulness: 'Helpful'
-          }) : null,
-          keywords: Array.isArray(parsed.keywords) ? parsed.keywords : 
-                   Array.isArray(parsed.primaryKeywords) ? parsed.primaryKeywords :
-                   ['SEO', 'optimization'],
-          improvements: Array.isArray(parsed.improvements) ? parsed.improvements.slice(0, 4) : 
-                       Array.isArray(parsed.strategies) ? parsed.strategies.slice(0, 4) :
-                       ['Optimize for target keywords', 'Improve content structure'],
-          featuredSnippet: parsed.featuredSnippet || {
-            potential: 'Medium',
-            recommendations: ['Structure content clearly', 'Use direct answers']
-          },
-          voiceSearch: parsed.voiceSearch || {
-            readiness: parsed.voiceSearchOptimized ? 'Good' : 'Needs work',
-            suggestions: ['Use conversational language', 'Provide direct answers']
-          },
-          readability: parsed.readability || {
-            score: parsed.readabilityScore || parsed.clarityScore || 75,
-            level: parsed.readingLevel || 'Medium',
-            suggestions: parsed.improvements || ['Use simpler language', 'Improve structure']
-          },
-          recommendations: Array.isArray(parsed.recommendations) ? 
-            parsed.recommendations.slice(0, 3) : [
-            {
-              type: 'SEO',
-              priority: 'High',
-              action: 'Optimize content for target keywords and user intent'
-            }
-          ],
-          rawAnalysis: aiResponse
-        };
-      }
+// Enhanced fallback function with more sophisticated scoring
+function enhancedFallbackScoring(question, answer, pageUrl, corsHeaders) {
+  console.log('Using enhanced fallback scoring...');
+  
+  // More sophisticated algorithmic calculations
+  let seoScore = 0;
+  let readabilityScore = 0;
+  let voiceSearchScore = 0;
+  
+  // SEO Score Calculation
+  // Question quality (30 points)
+  if (question.length >= 10 && question.length <= 60) seoScore += 10;
+  if (question.includes('?')) seoScore += 5;
+  if (/^(what|how|why|when|where|who|which|can|does|is|are)/i.test(question)) seoScore += 15;
+  
+  // Answer quality (50 points)
+  const wordCount = answer.split(/\s+/).length;
+  if (wordCount >= 40 && wordCount <= 100) seoScore += 20; // Optimal for featured snippets
+  else if (wordCount >= 20 && wordCount <= 300) seoScore += 15;
+  else if (wordCount > 10) seoScore += 5;
+  
+  // Featured snippet optimization (20 points)
+  const firstSentence = answer.split(/[.!?]/)[0] || '';
+  if (firstSentence.length >= 40 && firstSentence.length <= 250) seoScore += 20;
+  
+  // Keyword presence
+  const questionWords = question.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+  const answerLower = answer.toLowerCase();
+  const keywordMatches = questionWords.filter(word => answerLower.includes(word)).length;
+  seoScore += Math.min(20, keywordMatches * 5);
+  
+  // Readability Score Calculation
+  const sentences = answer.split(/[.!?]/).filter(s => s.trim().length > 0);
+  const avgWordsPerSentence = sentences.length > 0 ? wordCount / sentences.length : 20;
+  
+  // Sentence length scoring
+  if (avgWordsPerSentence <= 15) readabilityScore += 40;
+  else if (avgWordsPerSentence <= 20) readabilityScore += 30;
+  else if (avgWordsPerSentence <= 25) readabilityScore += 20;
+  else readabilityScore += 10;
+  
+  // Simple language bonus
+  const complexWords = answer.split(/\s+/).filter(word => word.length > 7).length;
+  const complexityRatio = complexWords / Math.max(1, wordCount);
+  if (complexityRatio < 0.1) readabilityScore += 30;
+  else if (complexityRatio < 0.2) readabilityScore += 20;
+  else readabilityScore += 10;
+  
+  // Structure bonus
+  if (/<[^>]+>/.test(answer)) readabilityScore += 10; // HTML formatting
+  if (sentences.length >= 2 && sentences.length <= 5) readabilityScore += 20;
+  
+  // Voice Search Score Calculation
+  // Question optimization (40 points)
+  if (/^(what|how|why|when|where|who)/i.test(question)) voiceSearchScore += 20;
+  if (question.length <= 50) voiceSearchScore += 10;
+  if (question.split(' ').length >= 3 && question.split(' ').length <= 8) voiceSearchScore += 10;
+  
+  // Answer optimization (60 points)
+  if (firstSentence.length >= 40 && firstSentence.length <= 200) voiceSearchScore += 30;
+  if (/\b(you|your|you're|you'll)\b/i.test(answer)) voiceSearchScore += 15;
+  if (sentences.length <= 3) voiceSearchScore += 15;
+  
+  // Generate intelligent suggestions based on scores
+  const suggestions = [];
+  
+  if (seoScore < 80) {
+    if (firstSentence.length > 250) {
+      suggestions.push(`Shorten your opening sentence to under 250 characters (currently ${firstSentence.length}) to improve Featured Snippet chances`);
     }
-  } catch (jsonError) {
-    console.log('JSON parsing failed with Llama 3.1 Fast, using fallback. Error:', jsonError.message);
+    if (wordCount < 40) {
+      suggestions.push(`Expand your answer to 40-100 words (currently ${wordCount}) for optimal Featured Snippet length`);
+    }
+    if (keywordMatches < 2) {
+      suggestions.push('Include more keywords from your question in the answer to improve relevance');
+    }
   }
-
-  // Fallback to text parsing if JSON fails
-  console.log('Using fallback analysis for Llama 3.1 Fast response');
-  return createFallbackAnalysis(question, answer);
+  
+  if (readabilityScore < 80) {
+    if (avgWordsPerSentence > 20) {
+      suggestions.push(`Reduce sentence length to under 20 words (current average: ${Math.round(avgWordsPerSentence)})`);
+    }
+    if (complexityRatio > 0.2) {
+      suggestions.push('Simplify language - replace complex words with simpler alternatives');
+    }
+  }
+  
+  if (voiceSearchScore < 80) {
+    if (!/\b(you|your)\b/i.test(answer)) {
+      suggestions.push('Add conversational elements using "you" and "your" for voice search optimization');
+    }
+    if (!firstSentence || firstSentence.length > 200) {
+      suggestions.push('Start with a concise direct answer (40-200 characters) for voice assistants');
+    }
+  }
+  
+  if (suggestions.length === 0) {
+    if (seoScore >= 90 && readabilityScore >= 90 && voiceSearchScore >= 90) {
+      suggestions.push('Excellent FAQ! This has strong Position Zero potential');
+    } else {
+      suggestions.push('Good FAQ! Fine-tune based on the scores above for Featured Snippet optimization');
+    }
+  }
+  
+  return new Response(JSON.stringify({
+    success: true,
+    seoScore: Math.min(100, seoScore),
+    readabilityScore: Math.min(100, readabilityScore),
+    voiceSearchScore: Math.min(100, voiceSearchScore),
+    suggestions,
+    analysis: {
+      questionLength: question.length,
+      answerWordCount: wordCount,
+      featuredSnippetPotential: seoScore >= 80,
+      positionZeroReady: seoScore >= 90,
+      targetKeyword: extractMainKeyword(question),
+      missingElements: generateMissingElements(seoScore, readabilityScore, voiceSearchScore),
+      aiPowered: false,
+      model: 'algorithmic',
+      fallbackUsed: true
+    }
+  }), {
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
 }
 
-// Enhanced fallback analysis when AI parsing fails
-function createFallbackAnalysis(question, answer) {
-  const questionLength = question.length;
-  const hasAnswer = !!answer;
-  const answerLength = answer ? answer.length : 0;
+// Helper function to extract main keyword from question
+function extractMainKeyword(question) {
+  // Remove question words and extract key topic
+  const cleaned = question
+    .toLowerCase()
+    .replace(/^(what|how|why|when|where|who|which|can|does|is|are)\s+/i, '')
+    .replace(/[?!.,]/g, '')
+    .trim();
+  
+  // Return first 2-3 significant words
+  const words = cleaned.split(/\s+/).filter(w => w.length > 2);
+  return words.slice(0, 3).join(' ');
+}
 
-  // Smarter scoring based on content analysis
-  let seoScore = 60; // Start higher for fast model
-  if (questionLength > 10 && questionLength < 100) seoScore += 15;
-  if (hasAnswer && answerLength > 50) seoScore += 15;
-  if (question.toLowerCase().includes('how') || question.toLowerCase().includes('what')) seoScore += 10;
+// Helper function to generate missing elements for perfect score
+function generateMissingElements(seoScore, readabilityScore, voiceSearchScore) {
+  const missing = [];
+  
+  if (seoScore < 100) {
+    if (seoScore < 50) missing.push('Direct answer in first sentence');
+    if (seoScore < 70) missing.push('Optimal word count (40-100 words)');
+    if (seoScore < 90) missing.push('Natural keyword placement');
+  }
+  
+  if (readabilityScore < 100) {
+    if (readabilityScore < 60) missing.push('Shorter sentences (under 20 words)');
+    if (readabilityScore < 80) missing.push('Simpler vocabulary');
+  }
+  
+  if (voiceSearchScore < 100) {
+    if (voiceSearchScore < 70) missing.push('Conversational tone');
+    if (voiceSearchScore < 90) missing.push('Concise opening statement');
+  }
+  
+  return missing;
+}
 
-  return {
-    seoScore: Math.min(100, seoScore),
-    questionQuality: {
-      score: questionLength > 5 ? 80 : 60,
-      clarity: questionLength > 10 ? 'Good' : 'Needs improvement',
-      seoOptimization: 'Analyzable via fast model',
-      naturalLanguage: 'Good'
-    },
-    answerQuality: hasAnswer ? {
-      score: answerLength > 50 ? 75 : 50,
-      length: answerLength > 50 ? 'Good' : 'Could be longer',
-      structure: 'Reviewable',
-      helpfulness: 'Helpful'
-    } : null,
-    keywords: ['FAQ', 'questions', 'answers', 'SEO'],
-    improvements: [
-      'Consider adding target keywords naturally',
-      'Optimize answer length for better engagement',
-      'Structure content for featured snippets',
-      'Improve readability and scan-ability'
-    ],
-    featuredSnippet: {
-      potential: 'Medium',
-      recommendations: ['Use clear structure', 'Provide direct answers', 'Include specific examples']
-    },
-    voiceSearch: {
-      readiness: 'Needs optimization',
-      suggestions: ['Use natural language', 'Include question words', 'Provide concise answers']
-    },
-    readability: {
-      score: 75,
-      level: 'Medium',
-      suggestions: ['Use shorter sentences', 'Break up content', 'Add formatting']
-    },
-    recommendations: [
-      {
-        type: 'Keywords',
-        priority: 'High',
-        action: 'Research and include relevant target keywords'
-      },
-      {
-        type: 'Structure',
-        priority: 'Medium',
-        action: 'Improve content organization and formatting'
-      },
-      {
-        type: 'Content',
-        priority: 'Medium',
-        action: 'Expand content with more comprehensive information'
-      }
-    ],
-    rawAnalysis: 'Fast analysis completed with fallback processing'
-  };
+// Helper function to generate default suggestions
+function generateDefaultSuggestions(seoScore, readabilityScore, voiceSearchScore) {
+  const suggestions = [];
+  
+  if (seoScore < 80) {
+    suggestions.push('Optimize for Featured Snippets by starting with a 40-250 character direct answer');
+  }
+  
+  if (readabilityScore < 80) {
+    suggestions.push('Improve readability by using shorter sentences and simpler words');
+  }
+  
+  if (voiceSearchScore < 80) {
+    suggestions.push('Make it more conversational for voice search optimization');
+  }
+  
+  return suggestions.length > 0 ? suggestions : ['Great FAQ! Consider testing variations to improve Position Zero chances'];
 }
