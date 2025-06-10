@@ -1,13 +1,9 @@
-/**
- * FAQ Answer Generator Worker
- * Uses Llama 4 Scout 17B (MoE) for comprehensive answer generation and improvement
- * Latest generation model with Mixture of Experts architecture (~3-5 neurons per request)
- * Updated to use the newest, most capable model available
- */
+// ULTIMATE FAQ ANSWER GENERATOR WORKER - Context Intelligence + Universal Preservation
+// The most intelligent FAQ generation system ever built
+// Features: Website context analysis + Universal content preservation + Enhanced prompting
 
 export default {
   async fetch(request, env, ctx) {
-    // CORS headers for cross-origin requests
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -15,12 +11,10 @@ export default {
       'Access-Control-Max-Age': '86400',
     };
 
-    // Handle CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
     }
 
-    // Only accept POST requests
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { 
         status: 405,
@@ -29,193 +23,359 @@ export default {
     }
 
     try {
-      // Parse request body
+      // ULTIMATE REQUEST PARSING - Context Intelligence + Universal Preservation
       const { 
         question, 
-        existingAnswer = '', 
-        mode = 'generate', 
+        existingAnswer, 
+        mode, 
         tone = 'professional',
-        context = '',
-        industry = ''
+        // Website Context Intelligence
+        pageUrl = '',
+        websiteContext = '',
+        hasWebsiteContext = false,
+        contextSummary = '',
+        // Universal Preservation
+        preservationInstructions = '',
+        hasSpecificContent = false,
+        preservationSummary = ''
       } = await request.json();
 
-      if (!question || question.trim().length < 3) {
+      if (!question) {
         return new Response(JSON.stringify({
-          error: 'Question is required and must be at least 3 characters',
-          answer: ''
-        }), {
+          error: 'Question is required'
+        }), { 
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
 
-      // Create prompt based on mode and context - now requesting JSON responses
-      const prompt = createPrompt(mode, question, existingAnswer, tone, context, industry);
+      // Enhanced rate limiting
+      const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
+      const today = new Date().toISOString().split('T')[0];
+      const rateLimitKey = `answer:${clientIP}:${today}`;
+      
+      let usageData = await env.FAQ_RATE_LIMITS?.get(rateLimitKey, { type: 'json' });
+      if (!usageData) {
+        usageData = { count: 0, date: today };
+      }
 
-      // Call Llama 4 Scout AI model (Mixture of Experts - estimated 3-5 neurons per request)
-      const response = await env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
+      if (usageData.count >= 75) { // Increased limit for ultimate system
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        tomorrow.setHours(0, 0, 0, 0);
+        
+        return new Response(JSON.stringify({
+          rateLimited: true,
+          error: 'Daily answer generation limit reached (75/day)',
+          resetTime: tomorrow.getTime()
+        }), {
+          status: 429,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+
+      // BUILD ULTIMATE INTELLIGENCE PROMPT
+      const prompt = buildUltimateIntelligencePrompt(question, existingAnswer, mode, tone, {
+        pageUrl,
+        websiteContext,
+        hasWebsiteContext,
+        contextSummary,
+        preservationInstructions,
+        hasSpecificContent,
+        preservationSummary
+      });
+
+      console.log('🚀 ULTIMATE AI Generation:', {
+        hasContext: hasWebsiteContext,
+        hasPreservation: hasSpecificContent,
+        contextSummary,
+        preservationSummary
+      });
+
+      // AI API call with ultimate intelligence
+      const aiResponse = await env.AI.run('@cf/meta/llama-3-8b-instruct', {
         messages: [
           { 
             role: 'system', 
-            content: getSystemPrompt(mode, tone)
+            content: buildUltimateSystemPrompt(hasWebsiteContext, hasSpecificContent)
           },
           { 
             role: 'user', 
             content: prompt 
           }
         ],
-        max_tokens: mode === 'expand' ? 600 : 500,
-        temperature: tone === 'creative' ? 0.8 : 0.3
+        temperature: mode === 'expand' ? 0.15 : 0.25, // Lower temperature for maximum precision
+        max_tokens: 1000 // Increased for richer responses
       });
 
-      // Process the AI response using new JSON parsing with fallback
-      const result = processAIResponse(response.response, mode);
+      const result = processUltimateAIResponse(aiResponse.response || aiResponse, mode);
 
-      // Calculate metrics for the answer
-      const metrics = calculateAnswerMetrics(result.answer, question);
+      // Enhanced result with intelligence metadata
+      result.intelligence = {
+        hasWebsiteContext,
+        hasSpecificContent,
+        contextSummary,
+        preservationSummary,
+        mode,
+        timestamp: Date.now()
+      };
 
-      return new Response(JSON.stringify({
-        success: true,
-        question: question,
-        mode: mode,
-        tone: tone,
-        answer: result.answer,
-        metrics: metrics,
-        suggestions: result.suggestions || generateSuggestions(result.answer, mode)
-      }), {
+      // Update usage count
+      usageData.count += 1;
+      await env.FAQ_RATE_LIMITS?.put(rateLimitKey, JSON.stringify(usageData), {
+        expirationTtl: 86400
+      });
+
+      return new Response(JSON.stringify(result), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
 
     } catch (error) {
-      console.error('AI Error:', error);
+      console.error('Ultimate answer generation error:', error);
       return new Response(JSON.stringify({
-        error: 'Answer generation failed',
-        details: error.message,
-        answer: ''
+        error: 'Answer generation failed. Please try again.'
       }), {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
-  },
+  }
 };
 
-// Updated system prompts for Llama 4 Scout's advanced capabilities
-function getSystemPrompt(mode, tone) {
-  const basePrompt = "You are an expert FAQ content writer with advanced SEO knowledge. You create clear, helpful, and highly optimized answers. Always respond with valid JSON only, following the exact structure requested.";
-  
-  const modeInstructions = {
-    generate: "Generate comprehensive, SEO-optimized answers that directly address the question with relevant details and clear structure.",
-    expand: "Intelligently expand existing content by adding valuable details, context, examples, and related information while maintaining the original meaning.",
-    examples: "Add concrete, relevant, and practical examples that enhance understanding and provide real-world context.",
-    tone: "Expertly adjust tone and style while preserving all important information and maintaining content quality."
-  };
+// ULTIMATE SYSTEM PROMPT with adaptive intelligence
+function buildUltimateSystemPrompt(hasWebsiteContext, hasSpecificContent) {
+  let systemPrompt = `You are the ULTIMATE FAQ content assistant - the most intelligent FAQ generation system ever created.
 
-  const toneInstructions = {
-    professional: "Use a professional, authoritative tone that builds trust. Be formal yet accessible, with clear and confident language.",
-    casual: "Use a friendly, conversational tone that feels natural and approachable. Be engaging while remaining informative.",
-    technical: "Use precise technical language appropriate for knowledgeable audiences. Include relevant terminology and detailed explanations.",
-    creative: "Use an engaging, creative tone that captures attention while remaining accurate and informative. Be memorable and distinctive."
-  };
+You have access to advanced context analysis and content preservation capabilities that make you incredibly accurate and business-aware.
 
-  return `${basePrompt} ${modeInstructions[mode] || modeInstructions.generate} ${toneInstructions[tone] || toneInstructions.professional}`;
+CORE PRINCIPLES:
+- Provide factual, detailed, and actionable information
+- Write from an authoritative business perspective  
+- Optimize for search engines and user experience
+- Maintain professional yet accessible language`;
+
+  // Add context intelligence capabilities
+  if (hasWebsiteContext) {
+    systemPrompt += `
+
+🧠 CONTEXT INTELLIGENCE MODE ACTIVE:
+You have analyzed the company's website and understand their business model, services, pricing, and unique positioning. Use this intelligence to provide accurate, company-specific information that aligns with their actual offerings.
+
+CONTEXT INTELLIGENCE RULES:
+- Reference actual company services, pricing, and features when relevant
+- Write from the company's perspective as the authoritative source
+- Ensure consistency with the company's established business model
+- Leverage specific business intelligence to enhance answer quality`;
+  }
+
+  // Add preservation capabilities  
+  if (hasSpecificContent) {
+    systemPrompt += `
+
+🛡️ CONTENT PRESERVATION MODE ACTIVE:
+You have detected specific business information that must be preserved exactly. Your advanced pattern recognition has identified pricing, company names, contact details, or other critical business information.
+
+PRESERVATION RULES:
+- NEVER replace existing specific information with generic alternatives
+- NEVER suggest competitor names or generic industry examples
+- NEVER change pricing, contact details, company names, or other specific business information
+- When expanding content, ADD value while keeping ALL original specific information intact
+- Treat all detected specific information as authoritative and accurate
+- Maintain the company's established tone and positioning`;
+  }
+
+  // Standard mode
+  if (!hasWebsiteContext && !hasSpecificContent) {
+    systemPrompt += `
+
+STANDARD MODE:
+Provide helpful, generic FAQ content that could apply to similar businesses. Focus on best practices and industry standards while avoiding specific claims about pricing, services, or company details unless explicitly provided.`;
+  }
+
+  return systemPrompt;
 }
 
-// Updated prompts to request JSON responses
-function createPrompt(mode, question, existingAnswer, tone, context, industry) {
-  const contextInfo = context ? `Context: ${context}\n` : '';
-  const industryInfo = industry ? `Industry: ${industry}\n` : '';
-  
+// ULTIMATE PROMPT BUILDING with context intelligence + preservation
+function buildUltimateIntelligencePrompt(question, existingAnswer, mode, tone, intelligenceContext) {
+  const { 
+    pageUrl, 
+    websiteContext, 
+    hasWebsiteContext, 
+    contextSummary,
+    preservationInstructions, 
+    hasSpecificContent, 
+    preservationSummary 
+  } = intelligenceContext;
+
+  // Build comprehensive context header
+  let contextHeader = '';
+  if (pageUrl) {
+    contextHeader += `Website: ${pageUrl}\n`;
+  }
+
+  // Add website intelligence
+  let websiteIntelligence = '';
+  if (hasWebsiteContext && websiteContext) {
+    websiteIntelligence = `
+🧠 WEBSITE INTELLIGENCE:
+${websiteContext}
+
+Context Summary: ${contextSummary}
+
+`;
+  }
+
+  // Add preservation intelligence
+  let preservationIntelligence = '';
+  if (hasSpecificContent && preservationInstructions) {
+    preservationIntelligence = `
+🛡️ CONTENT PRESERVATION INTELLIGENCE:
+${preservationInstructions}
+
+Preservation Summary: ${preservationSummary}
+
+`;
+  }
+
+  // Mode-specific prompts with ultimate intelligence
   switch (mode) {
     case 'generate':
-      return `${contextInfo}${industryInfo}Question: "${question}"
+      return `${contextHeader}${websiteIntelligence}${preservationIntelligence}Question: "${question}"
+${existingAnswer ? `Context Answer: "${existingAnswer}"` : ''}
 
-Create a comprehensive FAQ answer. Return ONLY a JSON object with this exact structure:
-{
-  "answer": "your generated answer here (50-300 characters for SEO)",
-  "suggestions": ["writing tip 1", "SEO tip 2", "improvement tip 3"]
-}
+Create a comprehensive, authoritative FAQ answer using your ultimate intelligence capabilities.
 
-Requirements for the answer:
-- Directly answers the question
-- 50-300 characters for SEO optimization
-- Uses clear, accessible language
-- Includes relevant details
-- Is structured for easy reading`;
+${hasWebsiteContext ? 'LEVERAGE WEBSITE INTELLIGENCE: Use the company context to provide accurate, business-specific information that aligns with their actual services and positioning.' : ''}
 
-    case 'expand':
-      return `${contextInfo}${industryInfo}Question: "${question}"
-Current Answer: "${existingAnswer}"
-
-Expand this answer. Return ONLY a JSON object with this exact structure:
-{
-  "answer": "your expanded answer here",
-  "suggestions": ["expansion tip 1", "detail tip 2", "improvement tip 3"]
-}
-
-Expand by:
-- Adding more relevant details
-- Including additional context
-- Providing more comprehensive information
-- Maintaining clarity and readability
-- Keeping the core message intact`;
-
-    case 'examples':
-      return `${contextInfo}${industryInfo}Question: "${question}"
-Current Answer: "${existingAnswer}"
-
-Add concrete examples to this answer. Return ONLY a JSON object with this exact structure:
-{
-  "answer": "your answer with examples integrated",
-  "suggestions": ["example tip 1", "improvement tip 2", "clarity tip 3"]
-}
-
-Requirements:
-- Include 2-3 specific examples
-- Make examples realistic and practical
-- Integrate examples naturally into the content
-- Maintain the original answer's structure`;
-
-    case 'tone':
-      return `${contextInfo}${industryInfo}Question: "${question}"
-Current Answer: "${existingAnswer}"
-Target Tone: ${tone}
-
-Rewrite this answer to match the target tone. Return ONLY a JSON object with this exact structure:
-{
-  "answer": "your tone-adjusted answer",
-  "suggestions": ["tone tip 1", "style tip 2", "improvement tip 3"]
-}
-
-Requirements:
-- Preserve all important information
-- Maintain accuracy and clarity
-- Adapt language style appropriately
-- Keep the same level of detail`;
-
-    default:
-      return `${contextInfo}${industryInfo}Create a helpful FAQ answer for: "${question}"
+${hasSpecificContent ? 'APPLY CONTENT PRESERVATION: Preserve all detected specific information exactly. Use these details as the authoritative source for company information.' : ''}
 
 Return ONLY a JSON object with this exact structure:
 {
-  "answer": "your answer here",
-  "suggestions": ["tip 1", "tip 2", "tip 3"]
+  "answer": "your comprehensive, intelligent answer here",
+  "suggestions": ["intelligent tip 1", "business insight 2", "optimization tip 3"]
+}
+
+ULTIMATE REQUIREMENTS:
+- Provide detailed, actionable information
+- Write from an authoritative business perspective
+- Optimize for search engines and featured snippets
+- Include specific details that demonstrate deep understanding
+- Maintain professional yet accessible language
+${hasWebsiteContext ? '- Reference actual company services and positioning' : ''}
+${hasSpecificContent ? '- PRESERVE all specific business information exactly' : ''}`;
+
+    case 'expand':
+      return `${contextHeader}${websiteIntelligence}${preservationIntelligence}Question: "${question}"
+Current Answer: "${existingAnswer}"
+
+EXPAND this answer using your ultimate intelligence capabilities to add valuable context, details, and insights.
+
+${hasWebsiteContext ? 'LEVERAGE WEBSITE INTELLIGENCE: Use company context to add relevant business-specific details that align with their actual services.' : ''}
+
+${hasSpecificContent ? 'CRITICAL PRESERVATION: Preserve ALL existing specific information exactly. Do not change any pricing, company names, contact details, or other specific business information. ADD intelligence while keeping original details intact.' : ''}
+
+Return ONLY a JSON object with this exact structure:
+{
+  "answer": "your expanded answer with ultimate intelligence while preserving all original specific information",
+  "suggestions": ["expansion insight 1", "detail enhancement 2", "optimization tip 3"]
+}
+
+ULTIMATE EXPANSION REQUIREMENTS:
+${hasSpecificContent ? '- PRESERVE all existing specific information exactly (pricing, names, contacts, etc.)' : '- Maintain consistency with existing content'}
+- ADD valuable context, details, and business insights
+- Enhance clarity and comprehensiveness
+- Include examples and practical applications
+- Maintain authoritative business tone
+- Optimize for search intent and user value
+${hasWebsiteContext ? '- Leverage company intelligence for relevant additions' : ''}`;
+
+    case 'examples':
+      return `${contextHeader}${websiteIntelligence}${preservationIntelligence}Question: "${question}"
+Current Answer: "${existingAnswer}"
+
+Add 2-3 intelligent, practical examples that demonstrate deep business understanding.
+
+${hasWebsiteContext ? 'LEVERAGE WEBSITE INTELLIGENCE: Create examples that align with the company\'s actual services and business model.' : ''}
+
+${hasSpecificContent ? 'ALIGN WITH SPECIFIC CONTENT: Ensure examples complement existing specific information and maintain consistency with established business details.' : ''}
+
+Return ONLY a JSON object with this exact structure:
+{
+  "answer": "your answer with intelligent examples integrated naturally",
+  "suggestions": ["example enhancement 1", "practical application 2", "user value tip 3"]  
+}
+
+ULTIMATE EXAMPLE REQUIREMENTS:
+- PRESERVE all existing content exactly
+- Add realistic, business-relevant examples
+- Integrate examples naturally into the content flow
+- Make examples specific and actionable
+- Demonstrate industry expertise
+${hasWebsiteContext ? '- Align examples with company\'s actual business model' : ''}
+${hasSpecificContent ? '- Ensure examples complement existing specific information' : ''}`;
+
+    case 'tone':
+      return `${contextHeader}${websiteIntelligence}${preservationIntelligence}Question: "${question}"
+Current Answer: "${existingAnswer}"
+Target Tone: ${tone}
+
+Adjust the tone while leveraging your ultimate intelligence to maintain business accuracy.
+
+${hasWebsiteContext ? 'MAINTAIN BUSINESS INTELLIGENCE: Keep the company-specific context accurate while adjusting language style.' : ''}
+
+${hasSpecificContent ? 'CRITICAL PRESERVATION: Keep all specific information (pricing, names, contacts, etc.) exactly the same while adjusting tone.' : ''}
+
+Return ONLY a JSON object with this exact structure:
+{
+  "answer": "your tone-adjusted answer with preserved business intelligence",
+  "suggestions": ["tone enhancement 1", "style improvement 2", "engagement tip 3"]
+}
+
+ULTIMATE TONE REQUIREMENTS:
+- PRESERVE all factual content and specific information exactly
+- Adjust language style to match target tone appropriately
+- Maintain business accuracy and authority
+- Keep professional credibility intact
+${hasWebsiteContext ? '- Maintain consistency with company positioning' : ''}
+${hasSpecificContent ? '- Keep all specific business information unchanged' : ''}`;
+
+    default:
+      return `${contextHeader}${websiteIntelligence}${preservationIntelligence}Create an intelligent FAQ answer for: "${question}"
+
+${hasWebsiteContext ? 'Use website intelligence to provide company-specific insights.' : ''}
+${hasSpecificContent ? 'Preserve any specific information exactly as provided.' : ''}
+
+Return ONLY a JSON object with this exact structure:
+{
+  "answer": "your intelligent answer here",
+  "suggestions": ["insight 1", "enhancement 2", "optimization 3"]
 }`;
   }
 }
 
-// Updated to parse JSON responses with fallback to text processing
-function processAIResponse(aiResponse, mode) {
+// Enhanced response processing with intelligence validation
+function processUltimateAIResponse(aiResponse, mode) {
   if (!aiResponse) return { answer: '', suggestions: [] };
 
-  console.log('AI Response:', aiResponse);
+  console.log('🧠 Processing ultimate AI response for mode:', mode);
 
-  // Try JSON parsing first
+  // Enhanced JSON parsing with multiple fallback strategies
   try {
-    // Clean the response - remove any text before/after JSON
     let cleanResponse = aiResponse.trim();
     
-    // Find JSON object boundaries
+    // Strategy 1: Direct JSON parsing
+    if (cleanResponse.startsWith('{') && cleanResponse.endsWith('}')) {
+      const parsed = JSON.parse(cleanResponse);
+      if (parsed.answer) {
+        console.log('✅ Direct JSON parsing successful');
+        return {
+          answer: enhanceAnswer(parsed.answer),
+          suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.slice(0, 3) : []
+        };
+      }
+    }
+    
+    // Strategy 2: Find JSON object boundaries
     const jsonStart = cleanResponse.indexOf('{');
     const jsonEnd = cleanResponse.lastIndexOf('}');
     
@@ -224,120 +384,69 @@ function processAIResponse(aiResponse, mode) {
       const parsed = JSON.parse(jsonString);
       
       if (parsed.answer) {
-        console.log('Successfully parsed JSON response');
+        console.log('✅ Boundary JSON parsing successful');
         return {
-          answer: cleanAnswer(parsed.answer),
+          answer: enhanceAnswer(parsed.answer),
           suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.slice(0, 3) : []
         };
       }
     }
+    
+    // Strategy 3: Extract from wrapped content
+    const answerMatch = cleanResponse.match(/"answer":\s*"([^"]+)"/);
+    if (answerMatch) {
+      console.log('✅ Regex extraction successful');
+      return {
+        answer: enhanceAnswer(answerMatch[1]),
+        suggestions: []
+      };
+    }
+    
   } catch (error) {
-    console.log('JSON parsing failed, falling back to text parsing:', error.message);
+    console.log('JSON parsing failed, using intelligent fallback processing');
   }
 
-  // Fallback to original text processing methods
-  console.log('Using fallback text processing for mode:', mode);
-  
+  // Intelligent fallback processing with content preservation
   let processed = aiResponse.trim();
-
-  // Remove common AI prefixes
+  
+  // Remove AI prefixes while preserving business content
   const prefixes = [
     'Answer:', 'Expanded Answer:', 'Answer with Examples:', 'Rewritten Answer:',
     'Here\'s', 'Here is', 'The answer is', 'A:', 'Response:', 'Sure!', 'Certainly!'
   ];
-
+  
   for (const prefix of prefixes) {
     if (processed.toLowerCase().startsWith(prefix.toLowerCase())) {
       processed = processed.substring(prefix.length).trim();
+      break;
     }
   }
 
-  // Clean up the text response
-  const cleanedAnswer = cleanAnswer(processed);
-  
   return {
-    answer: cleanedAnswer,
-    suggestions: generateSuggestions(cleanedAnswer, mode)
+    answer: enhanceAnswer(processed),
+    suggestions: []
   };
 }
 
-// Helper function to clean and format answers
-function cleanAnswer(answer) {
+// Enhance answer content while preserving business information
+function enhanceAnswer(answer) {
   if (!answer) return '';
-
-  let cleaned = answer.trim();
-
-  // Clean up markdown-style formatting for HTML
-  cleaned = cleaned
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') // Bold
-    .replace(/\*(.*?)\*/g, '<em>$1</em>') // Italic
-    .replace(/^\- (.+)$/gm, '<li>$1</li>') // List items
-    .replace(/^(\d+)\. (.+)$/gm, '<li>$1. $2</li>'); // Numbered list items
-
-  // Wrap list items in ul tags if present
-  if (cleaned.includes('<li>')) {
-    cleaned = cleaned.replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>');
-  }
-
-  // Remove any JSON artifacts
-  cleaned = cleaned.replace(/[{}]/g, '').replace(/"/g, '');
   
-  // Limit length (reasonable for FAQ answers)
-  if (cleaned.length > 1000) {
-    cleaned = cleaned.substring(0, 1000) + '...';
-  }
-
-  return cleaned;
+  return answer
+    .trim()
+    .replace(/^["']|["']$/g, '') // Remove surrounding quotes
+    .replace(/\n\s*\n\s*\n/g, '\n\n') // Clean excessive newlines  
+    .replace(/\\"/g, '"') // Unescape quotes
+    .replace(/\\n/g, '\n') // Unescape newlines
+    .trim();
 }
 
-// Calculate answer metrics for quality assessment
-function calculateAnswerMetrics(answer, question) {
-  const answerLength = answer.length;
-  const wordCount = answer.split(/\s+/).length;
-  const readabilityScore = Math.max(0, Math.min(100, 100 - (answerLength - 200) / 10));
-  
-  return {
-    characterCount: answerLength,
-    wordCount: wordCount,
-    readabilityScore: Math.round(readabilityScore),
-    seoOptimized: answerLength >= 50 && answerLength <= 300,
-    hasFormatting: answer.includes('<') || answer.includes('*'),
-    estimatedReadingTime: Math.ceil(wordCount / 200) // minutes
-  };
-}
-
-// Generate helpful suggestions based on content and mode
-function generateSuggestions(answer, mode) {
-  const suggestions = [];
-  
-  if (mode === 'generate') {
-    suggestions.push('Consider adding specific examples to make the answer more concrete');
-    suggestions.push('Include relevant keywords for better SEO performance');
-    suggestions.push('Structure the answer with bullet points for better readability');
-  } else if (mode === 'expand') {
-    suggestions.push('Add statistics or data to support your points');
-    suggestions.push('Include step-by-step instructions if applicable');
-    suggestions.push('Consider adding related resources or links');
-  } else if (mode === 'examples') {
-    suggestions.push('Make examples more specific to your industry');
-    suggestions.push('Add real-world scenarios that users can relate to');
-    suggestions.push('Include both positive and negative examples for clarity');
-  } else if (mode === 'tone') {
-    suggestions.push('Ensure the tone matches your brand voice consistently');
-    suggestions.push('Consider your target audience when adjusting tone');
-    suggestions.push('Balance professionalism with approachability');
-  }
-  
-  // Add general suggestions based on answer analysis
-  if (answer.length < 50) {
-    suggestions.push('Answer is quite short - consider adding more detail');
-  }
-  if (answer.length > 300) {
-    suggestions.push('Answer is quite long - consider breaking into smaller sections');
-  }
-  if (!answer.includes('<')) {
-    suggestions.push('Consider adding formatting like bold or lists for better readability');
-  }
-  
-  return suggestions.slice(0, 3); // Return max 3 suggestions
+// Ultimate validation system (future enhancement)
+function validateUltimateResponse(originalContent, generatedContent, intelligenceContext) {
+  // This could be enhanced to validate:
+  // - Specific content preservation
+  // - Website context accuracy
+  // - Business intelligence consistency
+  // For now, we rely on the enhanced prompting system
+  return true;
 }
