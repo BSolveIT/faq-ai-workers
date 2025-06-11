@@ -1,7 +1,11 @@
 {
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "faq-enhancement-worker",
-  "compatibility_date": "2024-12-19",
   "main": "src/index.js",
+  "compatibility_date": "2025-06-07",
+  "observability": {
+    "enabled": true
+  },
   "ai": {
     "binding": "AI"
   },
@@ -14,6 +18,8 @@
   "vars": {
     "WORKER_VERSION": "2.0.0-enhanced",
     "MODEL_NAME": "llama-4-scout-17b-16e-instruct",
-    "FEATURE_SET": "comprehensive-faq-enhancement"
+    "FEATURE_SET": "comprehensive-faq-enhancement",
+    "DAILY_LIMIT": "25",
+    "NODE_ENV": "production"
   }
 }
