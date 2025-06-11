@@ -10,5 +10,10 @@
       "binding": "FAQ_RATE_LIMITS",
       "id": "77fcd59503e34efcaf4d77d1a550433b"
     }
-  ]
+  ],
+  "vars": {
+    "WORKER_VERSION": "2.0.0-enhanced",
+    "MODEL_NAME": "llama-4-scout-17b-16e-instruct",
+    "FEATURE_SET": "comprehensive-faq-enhancement"
+  }
 }

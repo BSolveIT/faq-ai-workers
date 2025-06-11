@@ -163,7 +163,7 @@ Return ONLY the JSON object, no other text.`;
       console.log('Sending request to Llama 3.1 8B Fast...');
       
       // Use Llama 3.1 8B Fast - optimized for speed and quality
-      const aiResponse = await env.AI.run('@cf/meta/llama-3.1-8b-instruct-fast', {
+      const aiResponse = await env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
         messages: [
           {
             role: 'system',
