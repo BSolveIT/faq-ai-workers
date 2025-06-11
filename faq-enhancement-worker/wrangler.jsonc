@@ -19,7 +19,7 @@
     "WORKER_VERSION": "2.0.0-enhanced",
     "MODEL_NAME": "llama-4-scout-17b-16e-instruct",
     "FEATURE_SET": "comprehensive-faq-enhancement",
-    "DAILY_LIMIT": "25",
+    "DAILY_LIMIT": "50",
     "NODE_ENV": "production"
   }
 }

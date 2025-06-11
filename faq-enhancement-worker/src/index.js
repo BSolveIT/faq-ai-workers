@@ -59,17 +59,17 @@ export default {
         usageData = { count: 0, date: today };
       }
 
-      // Check rate limit (25 enhancements per day)
-      if (usageData.count >= 25) {
+      // Check rate limit (50 enhancements per day)
+      if (usageData.count >= 50) {
         const tomorrow = new Date();
         tomorrow.setDate(tomorrow.getDate() + 1);
         tomorrow.setHours(0, 0, 0, 0);
         
         return new Response(JSON.stringify({
           rateLimited: true,
-          error: 'Daily enhancement limit reached. You can enhance up to 25 FAQs per day.',
+          error: 'Daily enhancement limit reached. You can enhance up to 50 FAQs per day.',
           resetTime: tomorrow.getTime(),
-          limit: 25,
+          limit: 50,
           used: usageData.count
         }), { 
           status: 429,
@@ -188,7 +188,7 @@ Respond with valid JSON only.`;
           }
         ],
         temperature: 0.7,
-        max_tokens: 2000
+        max_tokens: 4000
       });
 
       let enhancements;
