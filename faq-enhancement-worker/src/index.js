@@ -1,6 +1,9 @@
-// Complete Enhanced FAQ Enhancement Worker with Full Legacy Functionality
-// Includes: Page Context Extraction, Session Caching, HTMLRewriter, Advanced Error Handling
-// URL: https://faq-enhancement-worker.winter-cake-bf57.workers.dev
+// Cloudflare Worker: faq-enhancement-worker.js
+// Enhanced FAQ optimization using Cloudflare Workers AI with Llama 4 Scout 17B
+// Complete implementation preserving all legacy functionality
+
+// Session-based caching for page context
+const sessionContextCache = new Map();
 
 export default {
   async fetch(request, env, ctx) {
@@ -39,7 +42,7 @@ export default {
         });
       }
 
-      // Rate limiting using KV store - UPDATED to 25/day
+      // Rate limiting using KV store (25/day limit)
       const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
       const today = new Date().toISOString().split('T')[0];
       const rateLimitKey = `enhance:${clientIP}:${today}`;
@@ -116,148 +119,16 @@ ANALYSIS REQUIREMENTS:
    - Consider voice search patterns (how, what, why questions)
    - Address the same core user need but with different approaches
 
-2. ANSWER STYLES: For EACH question variation, create 4 distinct answer approaches:
-   - CONCISE: 50-300 characters, optimized for featured snippets and quick answers
-   - DETAILED: Comprehensive answer with examples, context, and thorough explanation
-   - STRUCTURED: Well-organized with bullet points, numbered lists, or clear sections
-   - CONVERSATIONAL: Natural, voice-search friendly tone as if speaking to a friend
+2. MATCHED ANSWER STYLES: For each question variation, provide 4 answer styles:
+   - CONCISE: 50-300 characters, direct and to-the-point
+   - DETAILED: Comprehensive with examples and context
+   - STRUCTURED: Organized with bullet points or numbered lists
+   - CONVERSATIONAL: Natural, voice-search friendly tone
 
-3. CRITICAL REQUIREMENTS:
-   - Each answer MUST specifically address its paired question variation
-   - Don't just rephrase the same answer - tailor each to the question's focus
-   - Maintain factual accuracy and don't invent specific details
-   - Use natural language and avoid keyword stuffing
-   - Consider the target audience based on the question complexity
-
-4. SEO ANALYSIS: Provide comprehensive SEO evaluation including:
-   - Relevant keywords for this specific topic
-   - Search intent classification (informational/transactional/navigational)
-   - Voice search optimization potential
-   - Featured snippet optimization opportunities
-   - Areas for improvement
-
-5. QUALITY SCORING: Rate the current FAQ on these metrics (1-10 scale):
-   - Question Clarity: How clear and understandable is the question?
-   - Answer Completeness: How well does the answer address the question?
-   - SEO Optimization: How well optimized is it for search engines?
-
-SCORING CRITERIA:
-- Question Clarity (1-10):
-  - Does the question use clear, natural language? (2 points)
-  - Is it specific enough to be answerable? (2 points)
-  - Does it match how users actually search? (3 points)
-  - Is it free of jargon or confusing terms? (2 points)
-  - Does it target a clear user intent? (1 point)
-
-- Answer Completeness (1-10):
-  - Does it directly answer the question asked? (3 points)
-  - Is the information accurate and helpful? (2 points)
-  - Does it provide sufficient detail without being overwhelming? (2 points)
-  - Are examples or context provided where helpful? (2 points)
-  - Is the answer actionable when appropriate? (1 point)
-
-- SEO Optimization (1-10):
-  - Does it target relevant search terms naturally? (2 points)
-  - Is the answer length appropriate for the question type? (2 points)
-  - Does it use semantic variations of keywords naturally? (2 points)
-  - Is it written in a way that matches user search intent? (2 points)
-  - Does it avoid keyword stuffing while being discoverable? (2 points)
-
-Calculate the actual scores based on the FAQ provided, not example scores.
-
-Return ONLY this exact JSON structure with NO additional text, formatting, or explanations:
-
-{
-  "question_variations": [
-    {
-      "question": "first enhanced question variation on the same topic",
-      "reason": "specific explanation of why this question variation helps SEO or user discovery",
-      "type": "clarity|seo|specificity|grammar",
-      "priority": "high|medium|low",
-      "seo_benefit": "specific SEO advantage of this question phrasing",
-      "improvement_reason": "detailed explanation of the improvement made",
-      "answers": {
-        "concise": {
-          "text": "50-300 character answer specifically crafted for this question variation",
-          "approach": "concise",
-          "priority": "high"
-        },
-        "detailed": {
-          "text": "comprehensive answer with examples and context that thoroughly addresses this specific question variation",
-          "approach": "detailed",
-          "priority": "medium"
-        },
-        "structured": {
-          "text": "well-organized answer with bullet points, numbered lists, or clear sections specifically for this question",
-          "approach": "structured",
-          "priority": "medium"
-        },
-        "conversational": {
-          "text": "natural, voice-search friendly answer in conversational tone specifically tailored to this question's phrasing",
-          "approach": "conversational",
-          "priority": "low"
-        }
-      }
-    },
-    {
-      "question": "second enhanced question variation on the same topic",
-      "reason": "specific explanation of why this variation helps discoverability",
-      "type": "clarity|seo|specificity|grammar",
-      "priority": "high|medium|low",
-      "seo_benefit": "specific SEO advantage",
-      "improvement_reason": "detailed explanation of the improvement made",
-      "answers": {
-        "concise": {
-          "text": "concise answer specifically tailored to this question variation",
-          "approach": "concise",
-          "priority": "high"
-        },
-        "detailed": {
-          "text": "detailed answer addressing this question's specific angle and focus",
-          "approach": "detailed",
-          "priority": "medium"
-        },
-        "structured": {
-          "text": "structured answer with clear organization specifically for this question",
-          "approach": "structured",
-          "priority": "medium"
-        },
-        "conversational": {
-          "text": "conversational answer tailored to this question's specific phrasing and intent",
-          "approach": "conversational",
-          "priority": "low"
-        }
-      }
-    }
-  ],
-  "additional_suggestions": [
-    {
-      "suggestion": "specific actionable improvement recommendation",
-      "type": "add_examples|add_links|add_details|improve_structure|enhance_clarity",
-      "reason": "detailed explanation of why this improvement would help",
-      "impact": "high|medium|low"
-    }
-  ],
-  "seo_analysis": {
-    "keywords": ["relevant", "keywords", "extracted", "from", "topic"],
-    "search_intent": "informational|transactional|navigational",
-    "voice_search_friendly": true,
-    "featured_snippet_potential": true,
-    "improvement_areas": ["specific", "areas", "needing", "seo", "improvement"],
-    "target_audience": "description of the likely target audience",
-    "competition_level": "low|medium|high"
-  },
-  "quality_scores": {
-    "question_clarity": 7,
-    "answer_completeness": 8,
-    "seo_optimization": 6,
-    "score_explanations": {
-      "question_clarity": "specific detailed reason for this score based on the actual question provided",
-      "answer_completeness": "specific detailed reason for this score based on the actual answer provided",
-      "seo_optimization": "specific detailed reason for this score based on actual SEO factors observed"
-    }
-  }
-}
+3. QUALITY ANALYSIS: Score the original FAQ (1-10) on:
+   - Question Clarity (grammar, structure, search-friendliness)
+   - Answer Completeness (detail, helpfulness, actionability)
+   - SEO Optimization (keywords, length, search intent match)
 
 CRITICAL REQUIREMENTS:
 1. Each answer must be specifically written to answer its paired question variation
@@ -266,7 +137,70 @@ CRITICAL REQUIREMENTS:
 4. All content must stay on the same topic as the original FAQ
 5. Quality scores must be calculated based on ACTUAL analysis of the provided content
 6. Use natural language and avoid keyword stuffing
-7. Return ONLY valid JSON with no additional text or formatting`;
+7. Return ONLY valid JSON with no additional text or formatting
+
+Return this exact JSON structure:
+{
+  "question_variations": [
+    {
+      "question": "improved version of the question about the same topic",
+      "reason": "why this question variation helps SEO or user discovery",
+      "type": "grammar|clarity|seo|specificity",
+      "priority": "high|medium|low",
+      "seo_benefit": "specific SEO advantage of this question phrasing",
+      "improvement_reason": "detailed explanation of the improvement made",
+      "answers": {
+        "concise": {
+          "text": "50-300 character answer that directly answers THIS specific question",
+          "approach": "concise",
+          "priority": "high"
+        },
+        "detailed": {
+          "text": "comprehensive answer with examples that thoroughly answers THIS specific question",
+          "approach": "detailed",
+          "priority": "medium"
+        },
+        "structured": {
+          "text": "well-organized answer with bullet points or numbered lists answering THIS specific question",
+          "approach": "structured",
+          "priority": "medium"
+        },
+        "conversational": {
+          "text": "natural, voice-search friendly answer in conversational tone for THIS specific question",
+          "approach": "conversational",
+          "priority": "low"
+        }
+      }
+    }
+  ],
+  "additional_suggestions": [
+    {
+      "suggestion": "specific actionable improvement",
+      "type": "add_examples|improve_structure|enhance_keywords|voice_optimization",
+      "reason": "why this improvement helps",
+      "impact": "high|medium|low"
+    }
+  ],
+  "seo_analysis": {
+    "keywords": ["extracted", "relevant", "keywords"],
+    "search_intent": "informational|commercial|navigational|transactional",
+    "voice_search_friendly": true,
+    "featured_snippet_potential": true,
+    "improvement_areas": ["specific areas to improve"],
+    "target_audience": "description of target audience",
+    "competition_level": "low|medium|high"
+  },
+  "quality_scores": {
+    "question_clarity": 8,
+    "answer_completeness": 7,
+    "seo_optimization": 6,
+    "score_explanations": {
+      "question_clarity": "explanation of why this score",
+      "answer_completeness": "explanation of completeness score",
+      "seo_optimization": "explanation of SEO score"
+    }
+  }
+}`;
 
       // Call Cloudflare Workers AI with Llama 4 Scout 17B
       console.log('Calling Llama 4 Scout 17B for comprehensive enhancement analysis...');
@@ -362,7 +296,7 @@ CRITICAL REQUIREMENTS:
           resetTime: new Date().setHours(24, 0, 0, 0)
         },
         model_info: {
-          model: 'llama-4-scout-17b-16e-instruct',
+          model: '@cf/meta/llama-4-scout-17b-16e-instruct',
           version: env.WORKER_VERSION || '3.0.0-comprehensive',
           feature_set: 'full-legacy-functionality-plus-enhancements',
           page_context_extracted: pageContext.length > 0,
@@ -405,8 +339,7 @@ CRITICAL REQUIREMENTS:
         error: errorMessage,
         error_category: errorCategory,
         details: env.NODE_ENV === 'development' ? error.message : undefined,
-        suggestion: 'Try again in a few moments. If the problem persists, the FAQ can still be used as-is.',
-        fallback_available: true
+        suggestion: 'Try again in a few moments. If the problem persists, the FAQ can still be used as-is.'
       }), {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -415,54 +348,32 @@ CRITICAL REQUIREMENTS:
   }
 };
 
-// Session-based page context cache for speed optimization
-const sessionContextCache = new Map(); // sessionId:url -> { context, timestamp }
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutes TTL
-
-// Clean up expired cache entries
-function cleanupCache() {
-  const now = Date.now();
-  for (const [key, value] of sessionContextCache.entries()) {
-    if (now - value.timestamp > CACHE_TTL) {
-      sessionContextCache.delete(key);
-      console.log('Cleaned up expired cache entry:', key);
-    }
-  }
-}
-
-// Get page context with session-based caching for speed
+// Extract page context with session-based caching and cleanup
 async function getPageContextWithCaching(pageUrl, sessionId) {
-  // Create cache key
   const cacheKey = `${sessionId || 'no-session'}:${pageUrl}`;
   
-  // Check if we have cached context for this session+URL
+  // Check session cache first
   if (sessionContextCache.has(cacheKey)) {
-    const cached = sessionContextCache.get(cacheKey);
-    const age = Date.now() - cached.timestamp;
-    
-    if (age < CACHE_TTL) {
-      console.log(`Using cached page context (age: ${Math.round(age/1000)}s)`);
-      return cached.context;
-    } else {
-      // Expired, remove it
-      sessionContextCache.delete(cacheKey);
-      console.log('Cache entry expired, will refresh');
-    }
+    console.log('Using cached page context for session');
+    return sessionContextCache.get(cacheKey);
   }
   
-  // Not in cache or expired - extract fresh context
   console.log('Extracting fresh page context for:', pageUrl);
+  
+  // Extract fresh context
   const context = await extractPageContext(pageUrl);
   
-  // Cache the result
-  sessionContextCache.set(cacheKey, {
-    context: context,
-    timestamp: Date.now()
-  });
+  // Cache for this session (with cleanup)
+  if (sessionContextCache.size >= 100) {
+    // Remove oldest entry
+    const firstKey = sessionContextCache.keys().next().value;
+    sessionContextCache.delete(firstKey);
+  }
   
+  sessionContextCache.set(cacheKey, context);
   console.log(`Cached page context for session (${sessionContextCache.size} total entries)`);
   
-  // Periodically clean up cache
+  // Cleanup cache periodically
   if (sessionContextCache.size > 50) {
     cleanupCache();
   }
@@ -545,59 +456,198 @@ async function extractPageContext(pageUrl) {
   }
 }
 
-// Content extraction using HTMLRewriter for intelligent parsing
+// Enhanced content extraction using HTMLRewriter for intelligent parsing
 async function extractContentWithHTMLRewriter(html) {
-  const result = {
+  // Create a readable stream from the HTML string
+  const readable = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(html));
+      controller.close();
+    },
+  });
+
+  // Initialize content collector with comprehensive content types
+  const contentCollector = {
     title: '',
+    mainContent: '',
+    articleContent: '',
+    sectionContent: '',
+    paragraphContent: '',
+    headingContent: '',
+    divContent: '',
+    imgAltText: '',
+    buttonText: '',
+    listContent: '',
+    skipContent: false,
     headings: [],
-    content: '',
     metaDescription: ''
   };
+
+  // Create a response to pass through HTMLRewriter
+  const response = new Response(readable);
+
+  // Process with HTMLRewriter - comprehensive content extraction
+  const rewriter = new HTMLRewriter()
+    // Extract title and meta description
+    .on('title', {
+      text(text) {
+        contentCollector.title += text.text;
+      }
+    })
+    .on('meta[name="description"]', {
+      element(element) {
+        const content = element.getAttribute('content');
+        if (content) {
+          contentCollector.metaDescription = content;
+          contentCollector.mainContent += ' ' + content;
+        }
+      }
+    })
+    // Capture all headings separately for topic extraction
+    .on('h1, h2, h3, h4, h5, h6', {
+      text(text) {
+        const heading = text.text.trim();
+        if (heading && heading.length > 3) {
+          contentCollector.headings.push(heading);
+        }
+        // Double weight for headings in content
+        contentCollector.headingContent += ' ' + heading + ' ' + heading;
+      }
+    })
+    // Skip script, style, nav, footer, aside, svg
+    .on('script, style, nav, footer, aside, svg', {
+      element(element) {
+        element.remove();
+      }
+    })
+    // Capture alt text from images
+    .on('img', {
+      element(element) {
+        const alt = element.getAttribute('alt');
+        if (alt) {
+          contentCollector.imgAltText += ' ' + alt;
+        }
+      }
+    })
+    // Capture button text
+    .on('button', {
+      text(text) {
+        contentCollector.buttonText += ' ' + text.text;
+      }
+    })
+    // Process main content areas with higher priority
+    .on('main, article, .elementor-widget-container, .elementor-widget-text-editor, .content, .post-content', {
+      text(text) {
+        if (!contentCollector.skipContent) {
+          contentCollector.mainContent += ' ' + text.text;
+        }
+      }
+    })
+    .on('section', {
+      text(text) {
+        if (!contentCollector.skipContent) {
+          contentCollector.sectionContent += ' ' + text.text;
+        }
+      }
+    })
+    // Process common text elements
+    .on('p, span, td, th', {
+      text(text) {
+        if (!contentCollector.skipContent) {
+          contentCollector.paragraphContent += ' ' + text.text;
+        }
+      }
+    })
+    // Better capture list content
+    .on('li', {
+      text(text) {
+        if (!contentCollector.skipContent) {
+          contentCollector.listContent += ' • ' + text.text;
+        }
+      }
+    })
+    // Process divs (lowest priority, but still important)
+    .on('div', {
+      text(text) {
+        if (!contentCollector.skipContent) {
+          contentCollector.divContent += ' ' + text.text;
+        }
+      },
+      element(element) {
+        // Check for common non-content div classes/ids - WordPress and Elementor specific
+        const classAttr = element.getAttribute('class') || '';
+        const idAttr = element.getAttribute('id') || '';
+        
+        const nonContentPatterns = [
+          'navigation', 'main-menu', 'site-header', 'site-footer', 
+          'sidebar-area', 'banner-ad', 'popup-modal', 'cookie-notice', 
+          'comment-section', 'social-share', 'search-box',
+          'elementor-container', 'elementor-row', 'elementor-column-wrap',
+          'elementor-widget-image', 'elementor-widget-spacer',
+          'elementor-widget-divider', 'elementor-widget-social-icons',
+          'elementor-shape', 'elementor-background-overlay'
+        ];
+        
+        // Only skip if it matches a non-content pattern AND is not an elementor widget
+        // with actual content
+        contentCollector.skipContent = nonContentPatterns.some(pattern => 
+          classAttr.toLowerCase().includes(pattern) || idAttr.toLowerCase().includes(pattern)
+        ) && !classAttr.toLowerCase().includes('elementor-widget-text-editor');
+      }
+    });
+
+  // Transform the HTML
+  await rewriter.transform(response).text();
+
+  // Combine all content with proper prioritization
+  let extractedContent = '';
   
-  // Create a simple HTML parser for Cloudflare Workers environment
-  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-  if (titleMatch) {
-    result.title = titleMatch[1].trim();
+  // Add the title first as it's important
+  if (contentCollector.title) {
+    extractedContent += contentCollector.title + ' ';
   }
   
-  // Extract meta description
-  const metaMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["'][^>]*>/i);
-  if (metaMatch) {
-    result.metaDescription = metaMatch[1].trim();
+  // Add heading content with extra weight
+  if (contentCollector.headingContent) {
+    extractedContent += contentCollector.headingContent + ' ';
   }
   
-  // Extract headings (h1-h6)
-  const headingMatches = html.matchAll(/<h[1-6][^>]*>([^<]+)<\/h[1-6]>/gi);
-  for (const match of headingMatches) {
-    const heading = match[1].trim().replace(/\s+/g, ' ');
-    if (heading && heading.length > 2) {
-      result.headings.push(heading);
-    }
-  }
+  // Combine all content together with priorities
+  extractedContent += 
+    contentCollector.mainContent + ' ' + 
+    contentCollector.articleContent + ' ' + 
+    contentCollector.sectionContent + ' ' + 
+    contentCollector.paragraphContent + ' ' + 
+    contentCollector.listContent + ' ' + 
+    contentCollector.imgAltText + ' ' + 
+    contentCollector.buttonText + ' ' + 
+    contentCollector.divContent;
+
+  // Clean up whitespace and excessive repetition
+  extractedContent = extractedContent
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  console.log(`Extracted content length: ${extractedContent.length} characters`);
+  console.log(`Extracted ${contentCollector.headings.length} headings from page`);
   
-  // Extract main content by removing script, style, and nav elements
-  let cleanedHtml = html
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '')
-    .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '')
-    .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '')
-    .replace(/<aside[^>]*>[\s\S]*?<\/aside>/gi, '');
+  // Return comprehensive extraction result
+  return {
+    title: contentCollector.title.trim(),
+    content: extractedContent,
+    headings: Array.from(new Set(contentCollector.headings)), // Deduplicate headings
+    metaDescription: contentCollector.metaDescription
+  };
+}
+
+// Cache cleanup function
+function cleanupCache() {
+  // Remove oldest 25% of cache entries
+  const entriesToRemove = Math.floor(sessionContextCache.size * 0.25);
+  const keysToRemove = Array.from(sessionContextCache.keys()).slice(0, entriesToRemove);
   
-  // Extract text content from remaining HTML
-  const textMatches = cleanedHtml.matchAll(/>([^<]+)</g);
-  const textContent = [];
-  
-  for (const match of textMatches) {
-    const text = match[1].trim().replace(/\s+/g, ' ');
-    if (text && text.length > 10 && !text.match(/^[\d\s\.\-\+\(\)]+$/)) { // Skip pure numbers/symbols
-      textContent.push(text);
-    }
-  }
-  
-  result.content = textContent.join(' ').substring(0, 8000); // Limit content size
-  
-  return result;
+  keysToRemove.forEach(key => sessionContextCache.delete(key));
+  console.log(`Cache cleanup: removed ${entriesToRemove} entries`);
 }
 
 // Validate and enhance AI response structure
@@ -622,6 +672,7 @@ function validateAndEnhanceResponse(enhancements, originalQuestion, originalAnsw
     if (!variation.type) variation.type = 'seo';
     if (!variation.priority) variation.priority = index === 0 ? 'high' : 'medium';
     if (!variation.seo_benefit) variation.seo_benefit = 'Improved search engine visibility';
+    if (!variation.improvement_reason) variation.improvement_reason = 'Enhanced with optimized phrasing';
     
     // Ensure answers object exists and has all 4 styles
     if (!variation.answers || typeof variation.answers !== 'object') {
@@ -645,13 +696,19 @@ function validateAndEnhanceResponse(enhancements, originalQuestion, originalAnsw
     });
   });
   
-  // Ensure other required sections exist
+  // Ensure other required sections exist with defaults
   if (!enhancements.additional_suggestions) {
     enhancements.additional_suggestions = [
       {
         suggestion: 'Add specific examples to improve user understanding',
         type: 'add_examples',
         reason: 'Examples increase engagement and answer quality',
+        impact: 'high'
+      },
+      {
+        suggestion: 'Include relevant internal links where appropriate',
+        type: 'add_links',
+        reason: 'Internal linking improves SEO and user navigation',
         impact: 'medium'
       }
     ];
@@ -663,8 +720,8 @@ function validateAndEnhanceResponse(enhancements, originalQuestion, originalAnsw
       search_intent: 'informational',
       voice_search_friendly: true,
       featured_snippet_potential: true,
-      improvement_areas: ['keyword optimization', 'answer structure'],
-      target_audience: 'general users seeking information',
+      improvement_areas: ['keyword optimization', 'answer structure', 'length optimization'],
+      target_audience: 'users seeking informational content',
       competition_level: 'medium'
     };
   }
@@ -672,6 +729,38 @@ function validateAndEnhanceResponse(enhancements, originalQuestion, originalAnsw
   if (!enhancements.quality_scores) {
     enhancements.quality_scores = calculateQualityScores(originalQuestion, originalAnswer);
   }
+  
+  // Enhanced validation for quality scores
+  if (!enhancements.quality_scores || typeof enhancements.quality_scores !== 'object') {
+    enhancements.quality_scores = {
+      question_clarity: 5,
+      answer_completeness: 5,
+      seo_optimization: 5,
+      score_explanations: {
+        question_clarity: "Unable to analyze - using default score",
+        answer_completeness: "Unable to analyze - using default score",
+        seo_optimization: "Unable to analyze - using default score"
+      }
+    };
+  }
+  
+  // Ensure score explanations exist
+  if (!enhancements.quality_scores.score_explanations) {
+    enhancements.quality_scores.score_explanations = {
+      question_clarity: "Score based on grammar, clarity, and search-friendliness",
+      answer_completeness: "Score based on directness, detail, and structure",
+      seo_optimization: "Score based on keywords, length, and search intent match"
+    };
+  }
+  
+  // Validate score ranges (1-10)
+  ['question_clarity', 'answer_completeness', 'seo_optimization'].forEach(scoreType => {
+    const score = enhancements.quality_scores[scoreType];
+    if (typeof score !== 'number' || score < 1 || score > 10) {
+      enhancements.quality_scores[scoreType] = 5;
+      console.warn(`Invalid ${scoreType} score: ${score}, using default 5`);
+    }
+  });
 }
 
 // Create fallback question variations when AI doesn't provide enough
@@ -816,6 +905,12 @@ function createComprehensiveFallbackEnhancements(question, answer, pageContext) 
         suggestion: 'Include relevant internal links where appropriate',
         type: 'add_links',
         reason: 'Internal linking improves SEO and user navigation',
+        impact: 'medium'
+      },
+      {
+        suggestion: 'Optimize answer length for featured snippets',
+        type: 'improve_structure',
+        reason: 'Structured content performs better in search results',
         impact: 'medium'
       }
     ],
