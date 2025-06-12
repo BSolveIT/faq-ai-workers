@@ -104,8 +104,8 @@ export default {
         }
       }
 
-      // UPDATED PROMPT FOR 2 ANSWER TYPES
-      const enhancementPrompt = `You are an expert FAQ optimizer focused on SEO and user experience.
+      // UPDATED PROMPT FOR 2 ANSWER TYPES - STRICT JSON ONLY
+      const enhancementPrompt = `CRITICAL: Return ONLY valid JSON. No explanations, no introductory text, no comments. Your response must start with { and end with }.
 
 Analyze this FAQ and provide 2-3 improved question variations that stay on the same topic.
 
@@ -125,7 +125,7 @@ Create variations that:
 - Include relevant keywords naturally
 - Are 8-15 words long for optimal search visibility
 
-Return this EXACT JSON structure:
+RETURN ONLY THIS JSON STRUCTURE (no additional text):
 {
   "question_variations": [
     {
@@ -164,7 +164,9 @@ Return this EXACT JSON structure:
       "seo_optimization": "specific reason for score"
     }
   }
-}`;
+}
+
+IMPORTANT: Return ONLY the JSON object above. No other text.`;
 
       // Update rate limit counter first
       usageData.count++;
@@ -196,7 +198,7 @@ Return this EXACT JSON structure:
                 messages: [
                   { 
                     role: 'system', 
-                    content: 'You are an expert FAQ optimizer. Create 2-3 question variations with exactly 2 answer types each: "optimised" (50-100 words for featured snippets) and "detailed" (200-300 words for comprehensive coverage). Always return valid JSON.'
+                    content: 'You are an expert FAQ optimizer. CRITICAL: Return ONLY valid JSON. No explanations, no introductory text, no comments. Your response must begin with { and end with }. Create 2-3 question variations with exactly 2 answer types each: "optimised" (50-100 words for featured snippets) and "detailed" (200-300 words for comprehensive coverage).'
                   },
                   { 
                     role: 'user', 
@@ -217,12 +219,29 @@ Return this EXACT JSON structure:
             const responseText = aiResponse.response;
             console.log(`AI response received in ${Date.now() - startTime}ms on attempt ${attempt}`);
 
-            // Clean response and parse JSON
+            // Clean response and parse JSON - ENHANCED CLEANING
             let cleanedResponse = responseText
               .replace(/```json/gi, '')
               .replace(/```javascript/gi, '')
               .replace(/```/g, '')
-              .trim()
+              .trim();
+            
+            // AGGRESSIVE: Remove any introductory text before the JSON
+            const jsonStart = cleanedResponse.indexOf('{');
+            if (jsonStart > 0) {
+              console.log(`Removing ${jsonStart} characters of intro text before JSON`);
+              cleanedResponse = cleanedResponse.substring(jsonStart);
+            }
+            
+            // AGGRESSIVE: Remove any trailing text after the JSON
+            const jsonEnd = cleanedResponse.lastIndexOf('}');
+            if (jsonEnd > -1 && jsonEnd < cleanedResponse.length - 1) {
+              console.log(`Removing trailing text after JSON`);
+              cleanedResponse = cleanedResponse.substring(0, jsonEnd + 1);
+            }
+            
+            // Final cleanup
+            cleanedResponse = cleanedResponse
               .replace(/\n/g, ' ')
               .replace(/\r/g, '')
               .replace(/\t/g, ' ')
