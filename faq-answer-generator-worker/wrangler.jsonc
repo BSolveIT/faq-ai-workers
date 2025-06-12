@@ -1,16 +1,27 @@
-/**
- * For more details on how to configure Wrangler, refer to:
- * https://developers.cloudflare.com/workers/wrangler/configuration/
- */
 {
-    "$schema": "node_modules/wrangler/config-schema.json",
-    "name": "faq-answer-generator-worker",
-    "main": "src/index.js",
-    "compatibility_date": "2025-06-07",
-    "observability": {
-        "enabled": true
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "faq-answer-generator-worker", 
+  "main": "src/index.js",
+  "compatibility_date": "2025-06-07",
+  "observability": {
+    "enabled": true
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "FAQ_CACHE",
+      "id": "8a2d095ab02947408cbf81e70a3e7f8a"
     },
-    "ai": {
-        "binding": "AI"
+    {
+      "binding": "FAQ_RATE_LIMITS", 
+      "id": "77fcd59503e34efcaf4d77d1a550433b"
     }
+  ],
+  "vars": {
+    "WORKER_VERSION": "2.1.0-contextual-redesign",
+    "MODEL_NAME": "@cf/meta/llama-3.1-8b-instruct",
+    "FEATURE_SET": "contextual-answer-suggestions-with-cache"
+  }
 }
