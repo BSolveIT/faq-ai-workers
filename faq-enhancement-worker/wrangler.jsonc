@@ -16,9 +16,9 @@
     }
   ],
   "vars": {
-    "WORKER_VERSION": "2.0.0-enhanced",
-    "MODEL_NAME": "llama-4-scout-17b-16e-instruct",
-    "FEATURE_SET": "comprehensive-faq-enhancement",
+    "WORKER_VERSION": "3.0.0-speed-optimized",
+    "MODEL_NAME": "llama-3.1-8b-instruct",
+    "FEATURE_SET": "comprehensive-faq-enhancement-2-answers",
     "DAILY_LIMIT": "50",
     "NODE_ENV": "production"
   }
