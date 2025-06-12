@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "faq-realtime-assistant-worker",
+  "name": "faq-realtime-assistant-worker", 
   "main": "src/index.js",
   "compatibility_date": "2025-06-07",
   "observability": {
@@ -9,9 +9,19 @@
   "ai": {
     "binding": "AI"
   },
+  "kv_namespaces": [
+    {
+      "binding": "FAQ_CACHE",
+      "id": "8a2d095ab02947408cbf81e70a3e7f8a"
+    },
+    {
+      "binding": "FAQ_RATE_LIMITS", 
+      "id": "77fcd59503e34efcaf4d77d1a550433b"
+    }
+  ],
   "vars": {
-    "WORKER_VERSION": "2.0.0-enhanced",
-    "MODEL_NAME": "llama-4-scout-17b-16e-instruct",
-    "FEATURE_SET": "enhanced-question-optimizer"
+    "WORKER_VERSION": "2.1.0-contextual-redesign",
+    "MODEL_NAME": "@cf/meta/llama-3.1-8b-instruct",
+    "FEATURE_SET": "contextual-suggestions-with-cache"
   }
 }

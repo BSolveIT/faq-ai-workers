@@ -1,16 +1,31 @@
 {
 	"name": "faq-realtime-assistant-worker",
-	"version": "0.0.0",
+	"version": "2.1.0",
 	"private": true,
+	"description": "Enhanced FAQ Realtime Assistant Worker with contextual suggestions and caching",
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
-		"test": "vitest"
+		"test": "vitest",
+		"test:watch": "vitest --watch",
+		"type-check": "tsc --noEmit",
+		"preview": "wrangler dev --remote"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.8.19",
-		"vitest": "~3.0.7",
-		"wrangler": "^4.19.1"
-	}
+		"@cloudflare/vitest-pool-workers": "^0.8.20",
+		"@cloudflare/workers-types": "^4.20250115.0",
+		"vitest": "^3.0.9",
+		"wrangler": "^4.19.2"
+	},
+	"engines": {
+		"node": ">=18.0.0"
+	},
+	"keywords": [
+		"cloudflare-workers",
+		"ai",
+		"faq",
+		"contextual-suggestions",
+		"llama-3.1"
+	]
 }

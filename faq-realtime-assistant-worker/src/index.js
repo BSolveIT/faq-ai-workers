@@ -1,9 +1,218 @@
 /**
- * Enhanced FAQ Realtime Assistant Worker - Question Optimizer
- * UPGRADED: From Llama 3.2 1B to Llama 4 Scout 17B for premium SEO analysis
- * Features: 3 scored question options, SEO benefits, Position Zero optimization
- * Cost: ~6.3 neurons per request (vs 1.2 neurons previously)
+ * FAQ Realtime Assistant Worker - Enhanced Contextual Redesign (FIXED VERSION)
+ * 
+ * TRANSFORMATION: Complex panel responses → Simple contextual suggestions with JIT learning
+ * 
+ * Features:
+ * - Educational benefits/explanations for each suggestion (JIT Learning)
+ * - Smart website context integration
+ * - SEO scoring and keyword optimization
+ * - Question type detection and specialized suggestions
+ * - Smart caching for performance
+ * - High rate limits for contextual usage
+ * - Enhanced error handling and fallbacks
+ * - Grammar checking and improvement
+ * 
+ * FIXES APPLIED:
+ * ✅ Increased token limits (200-250) for complete responses
+ * ✅ Robust JSON parsing with multiple fallback methods
+ * ✅ Better cache key generation
+ * ✅ Regex extraction fallback system
+ * ✅ Enhanced error handling and logging
  */
+
+/**
+ * Improve grammar and formatting of text suggestions
+ */
+function improveGrammar(text) {
+  if (!text || typeof text !== 'string') return text;
+  
+  const originalText = text.trim();
+  let improved = originalText;
+  
+  // Fix basic capitalization
+  improved = improved.charAt(0).toUpperCase() + improved.slice(1);
+  
+  // Fix question mark spacing and ensure questions end with ?
+  improved = improved.replace(/\s*\?\s*$/, '?');
+  if (improved.match(/^(how|what|why|when|where|which|who|can|should|will|would|could|do|does|did|is|are|was|were)/i) && !improved.endsWith('?')) {
+    improved += '?';
+  }
+  
+  // Fix common grammar issues
+  improved = improved
+    // Fix double spaces
+    .replace(/\s+/g, ' ')
+    // Fix spacing around punctuation
+    .replace(/\s+([,.!?;:])/g, '$1')
+    .replace(/([,.!?;:])\s*/g, '$1 ')
+    // Fix "a" vs "an"
+    .replace(/\ba\s+([aeiouAEIOU])/g, 'an $1')
+    .replace(/\ban\s+([^aeiouAEIOU])/g, 'a $1')
+    // Fix common word issues
+    .replace(/\bits\s+own\b/gi, 'its own')
+    .replace(/\byour\s+welcome\b/gi, "you're welcome")
+    .replace(/\bwho's\b/gi, 'whose')
+    // Ensure proper sentence ending
+    .replace(/([^.!?])\s*$/, '$1');
+  
+  // Fix common FAQ-specific issues
+  improved = improved
+    .replace(/\bSEO\b/g, 'SEO') // Ensure SEO is uppercase
+    .replace(/\bAPI\b/g, 'API') // Ensure API is uppercase
+    .replace(/\bURL\b/g, 'URL') // Ensure URL is uppercase
+    .replace(/\bHTTPS?\b/gi, 'HTTPS') // Fix protocol naming
+    .replace(/\bwebsite\s+website\b/gi, 'website') // Remove duplicates
+    .replace(/\bthe\s+the\b/gi, 'the'); // Remove duplicate articles
+  
+  // Ensure questions don't end with period before question mark
+  improved = improved.replace(/\.\?$/, '?');
+  
+  // Clean up final result
+  improved = improved.trim();
+  
+  // Log grammar improvements for debugging
+  if (improved !== originalText) {
+    console.log(`[Grammar] ✅ Fixed: "${originalText}" → "${improved}"`);
+  }
+  
+  return improved;
+}
+
+/**
+ * Analyze question to provide better, targeted suggestions with duplicate detection
+ */
+function analyzeQuestion(primaryQuestion, existingQuestions = []) {
+  const cleanQuestion = primaryQuestion.trim().toLowerCase();
+  
+  // Detect question type
+  let type = 'general';
+  if (/^how\s+(do|can|to|long|often|much)/.test(cleanQuestion)) {
+    type = 'how-to';
+  } else if (/^what\s+(is|are|does|can)/.test(cleanQuestion)) {
+    type = 'definition';
+  } else if (/^why\s+(do|does|is|are)/.test(cleanQuestion)) {
+    type = 'explanation';
+  } else if (/^when\s+(do|does|is|should)/.test(cleanQuestion)) {
+    type = 'timing';
+  } else if (/^where\s+(do|can|is|are)/.test(cleanQuestion)) {
+    type = 'location';
+  }
+  
+  // Extract potential keywords
+  const words = cleanQuestion.replace(/[^\w\s]/g, '').split(/\s+/);
+  const stopWords = ['how', 'what', 'why', 'when', 'where', 'do', 'does', 'is', 'are', 'can', 'the', 'a', 'an', 'to', 'for', 'of', 'in', 'on', 'with'];
+  const keywords = words.filter(word => word.length > 2 && !stopWords.includes(word)).slice(0, 5);
+  
+  // Basic SEO scoring
+  let seoScore = 50; // Base score
+  
+  if (primaryQuestion.includes('?')) seoScore += 10;
+  if (primaryQuestion.length >= 20 && primaryQuestion.length <= 100) seoScore += 15;
+  if (keywords.length >= 2) seoScore += 10;
+  if (/^(how|what|why|when|where)/.test(cleanQuestion)) seoScore += 15;
+  
+  // Identify improvements needed
+  const improvements = [];
+  if (!primaryQuestion.includes('?')) improvements.push('Add question mark');
+  if (primaryQuestion.length < 20) improvements.push('Add more specific details');
+  if (keywords.length < 2) improvements.push('Include more relevant keywords');
+  if (!/^(how|what|why|when|where)/.test(cleanQuestion)) improvements.push('Start with question word');
+  
+  // Create duplicate detection patterns
+  const duplicatePatterns = existingQuestions.map(q => ({
+    original: q,
+    normalized: normalizeQuestionForComparison(q),
+    keywords: extractKeywordsForComparison(q)
+  }));
+  
+  console.log(`[Question Analysis] Duplicate detection: ${duplicatePatterns.length} patterns created`);
+  
+  return {
+    type,
+    keywords,
+    seoScore: Math.min(seoScore, 100),
+    improvements,
+    length: primaryQuestion.length,
+    hasQuestionMark: primaryQuestion.includes('?'),
+    duplicatePatterns,
+    existingCount: existingQuestions.length
+  };
+}
+
+/**
+ * Normalize question for duplicate detection
+ */
+function normalizeQuestionForComparison(question) {
+  return question
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s]/g, ' ')           // Remove punctuation
+    .replace(/\s+/g, ' ')              // Normalize whitespace
+    .replace(/\b(how|what|why|when|where|do|does|is|are|can|will|should|could|would)\b/g, '') // Remove question words
+    .replace(/\b(the|a|an|to|for|of|in|on|with|by|from|up|about|into|through|during|before|after|above|below|between|among)\b/g, '') // Remove articles/prepositions
+    .trim();
+}
+
+/**
+ * Extract keywords for similarity checking
+ */
+function extractKeywordsForComparison(question) {
+  const normalized = normalizeQuestionForComparison(question);
+  return normalized.split(/\s+/).filter(word => word.length > 2).slice(0, 10);
+}
+
+/**
+ * Check if a new question is too similar to existing ones
+ */
+function isDuplicateQuestion(newQuestion, duplicatePatterns, threshold = 0.7) {
+  const newNormalized = normalizeQuestionForComparison(newQuestion);
+  const newKeywords = extractKeywordsForComparison(newQuestion);
+  
+  for (const pattern of duplicatePatterns) {
+    // Exact match check
+    if (newNormalized === pattern.normalized) {
+      console.log(`[Duplicate Check] EXACT match found: "${newQuestion}" matches "${pattern.original}"`);
+      return true;
+    }
+    
+    // Keyword similarity check
+    const commonKeywords = newKeywords.filter(keyword => pattern.keywords.includes(keyword));
+    const similarity = commonKeywords.length / Math.max(newKeywords.length, pattern.keywords.length);
+    
+    if (similarity >= threshold) {
+      console.log(`[Duplicate Check] HIGH similarity (${(similarity * 100).toFixed(1)}%): "${newQuestion}" similar to "${pattern.original}"`);
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Filter out duplicate suggestions
+ */
+function filterDuplicateSuggestions(suggestions, duplicatePatterns, stepName) {
+  if (!suggestions || suggestions.length === 0) return [];
+  
+  const filtered = [];
+  let duplicatesFound = 0;
+  
+  for (const suggestion of suggestions) {
+    const questionText = suggestion.text || suggestion;
+    
+    if (isDuplicateQuestion(questionText, duplicatePatterns)) {
+      duplicatesFound++;
+      console.log(`[${stepName}] Filtered duplicate: "${questionText.substring(0, 60)}..."`);
+    } else {
+      filtered.push(suggestion);
+      console.log(`[${stepName}] Accepted unique: "${questionText.substring(0, 60)}..."`);
+    }
+  }
+  
+  console.log(`[${stepName}] Duplicate filtering: ${duplicatesFound} duplicates removed, ${filtered.length} unique suggestions kept`);
+  return filtered;
+}
 
 export default {
   async fetch(request, env, ctx) {
@@ -11,575 +220,1077 @@ export default {
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-      'Access-Control-Max-Age': '86400',
+      'Access-Control-Allow-Headers': 'Content-Type, X-Request-ID',
+      'Access-Control-Max-Age': '86400'
     };
 
-    // Handle CORS preflight
+    // Handle CORS preflight requests
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
     }
 
     // Only accept POST requests
     if (request.method !== 'POST') {
-      return new Response('Method not allowed', { 
+      return new Response(JSON.stringify({
+        error: 'Method not allowed'
+      }), { 
         status: 405,
-        headers: corsHeaders 
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
+    const requestStartTime = Date.now();
+
     try {
-      // Parse enhanced request body with new context fields
+      // Parse request body
+      const requestData = await request.json();
       const { 
-        question, 
-        answer = '', 
-        pageUrl = '', 
-        websiteContext = '', 
-        mode = 'improve' 
-      } = await request.json();
+        questions = [],           // Array of all questions (original + generated)
+        currentAnswer = '',       // Current answer text
+        mode = 'improve', 
+        websiteContext = '',      // Optional pre-fetched context
+        pageUrl = '',            // Optional page URL (for reference only)
+        forceRefresh = false,
+        cacheBypass = null
+      } = requestData;
+
+      console.log(`[Main Handler] ======== Starting ${mode} request ========`);
+      console.log(`[Main Handler] Questions array: ${questions.length} questions, Answer: ${currentAnswer?.length || 0} chars`);
+      console.log(`[Main Handler] Mode: ${mode} | Context: ${websiteContext ? 'Yes' : 'No'} | Page URL: ${pageUrl ? 'Yes' : 'No'}`);
+      
+      // Log existing questions for duplicate prevention
+      if (questions.length > 0) {
+        console.log(`[Main Handler] Existing questions to avoid duplicating:`);
+        questions.forEach((q, index) => {
+          console.log(`[Main Handler]   ${index + 1}. "${q.substring(0, 60)}${q.length > 60 ? '...' : ''}"`);
+        });
+      }
 
       // Validate input
-      if (!question || question.trim().length < 3) {
+      if (!questions || questions.length === 0) {
+        console.error(`[Main Handler] Validation failed: No questions provided`);
         return new Response(JSON.stringify({
-          error: 'Question too short or missing',
-          suggestions: []
-        }), {
+          error: 'At least one question is required',
+          contextual: true
+        }), { 
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
 
-      // Enhanced mode handling with sophisticated prompts
-      if (mode === 'improve') {
-        return await handleQuestionImprovement(question, answer, pageUrl, websiteContext, env, corsHeaders);
-      } else if (mode === 'autocomplete') {
-        return await handleQuestionAutocomplete(question, env, corsHeaders);
-      } else {
-        return await handleQuestionValidation(question, env, corsHeaders);
+      // Get the primary question (usually the first/original one)
+      const primaryQuestion = questions[0];
+      console.log(`[Main Handler] Primary question: "${primaryQuestion.substring(0, 75)}..." (${primaryQuestion.length} chars)`);
+
+      // Rate limiting check (high limits for contextual usage)
+      const rateLimitStartTime = Date.now();
+      const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
+      const rateLimitResult = await checkRateLimit(clientIP, env);
+      const rateLimitDuration = ((Date.now() - rateLimitStartTime) / 1000).toFixed(2);
+      
+      console.log(`[Main Handler] Rate limit check completed in ${rateLimitDuration}s - Used: ${rateLimitResult.current}/1000`);
+      
+      if (rateLimitResult.blocked) {
+        console.warn(`[Main Handler] Rate limit exceeded for IP ${clientIP} - ${rateLimitResult.current}/1000 requests`);
+        return new Response(JSON.stringify({
+          error: 'Daily limit reached. Please try again tomorrow.',
+          rateLimited: true,
+          contextual: true,
+          resetTime: rateLimitResult.resetTime
+        }), {
+          status: 429,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
       }
 
+      // Check cache first (unless force refresh)
+      let cacheKey = null;
+      let cacheCheckDuration = 0;
+      if (!forceRefresh && !cacheBypass) {
+        const cacheStartTime = Date.now();
+        cacheKey = createCacheKey(questions, mode, websiteContext);
+        if (cacheKey) {
+          const cached = await getCachedResponse(cacheKey, env);
+          cacheCheckDuration = ((Date.now() - cacheStartTime) / 1000).toFixed(2);
+          
+          if (cached) {
+            console.log(`[Main Handler] Cache HIT in ${cacheCheckDuration}s - returning cached response`);
+            // Ensure cached response has grammar_checked flag
+            if (cached.metadata) {
+              cached.metadata.grammar_checked = true;
+              cached.metadata.cached = true;
+            }
+            return new Response(JSON.stringify(cached), {
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+            });
+          } else {
+            console.log(`[Main Handler] Cache MISS in ${cacheCheckDuration}s - proceeding with AI generation`);
+          }
+        } else {
+          console.log(`[Main Handler] Cache disabled (no cache key generated)`);
+        }
+      } else {
+        console.log(`[Main Handler] Cache bypassed - force refresh: ${forceRefresh}, cache bypass: ${!!cacheBypass}`);
+      }
+
+      // Analyze primary question for better suggestions
+      const analysisStartTime = Date.now();
+      const questionAnalysis = analyzeQuestion(primaryQuestion, questions);
+      const analysisDuration = ((Date.now() - analysisStartTime) / 1000).toFixed(2);
+      
+      console.log(`[Main Handler] Question analysis completed in ${analysisDuration}s:`);
+      console.log(`[Main Handler] - Type: ${questionAnalysis.type} | SEO Score: ${questionAnalysis.seoScore}/100`);
+      console.log(`[Main Handler] - Keywords: [${questionAnalysis.keywords.join(', ')}] | Improvements needed: ${questionAnalysis.improvements.length}`);
+      console.log(`[Main Handler] - Duplicate prevention: ${questions.length} existing questions to avoid`);
+      
+      // Generate enhanced contextual suggestions based on mode
+      const generationStartTime = Date.now();
+      let suggestions = [];
+      
+      console.log(`[Main Handler] Starting ${mode} generation with duplicate prevention...`);
+      
+      switch (mode) {
+        case 'typing':
+        case 'autocomplete':
+          suggestions = await generateEnhancedTypingSuggestions(questions, currentAnswer, questionAnalysis, env, websiteContext);
+          break;
+          
+        case 'improve':
+        case 'enhance':
+        case 'regenerate':
+          suggestions = await generateEnhancedImprovementSuggestions(questions, currentAnswer, questionAnalysis, env, websiteContext);
+          break;
+          
+        case 'validate':
+        case 'tips':
+          suggestions = await generateEnhancedValidationTips(questions, currentAnswer, questionAnalysis, env, websiteContext);
+          break;
+          
+        default:
+          console.warn(`[Main Handler] Unknown mode: ${mode}, defaulting to improvement`);
+          suggestions = await generateEnhancedImprovementSuggestions(questions, currentAnswer, questionAnalysis, env, websiteContext);
+      }
+      
+      const generationDuration = ((Date.now() - generationStartTime) / 1000).toFixed(2);
+      console.log(`[Main Handler] ${mode} generation completed in ${generationDuration}s - ${suggestions.length} suggestions generated`);
+
+      // Update rate limit counter
+      const rateLimitUpdateStart = Date.now();
+      await updateRateLimit(clientIP, env);
+      const rateLimitUpdateDuration = ((Date.now() - rateLimitUpdateStart) / 1000).toFixed(2);
+      console.log(`[Main Handler] Rate limit updated in ${rateLimitUpdateDuration}s`);
+
+      // Build enhanced response with educational value
+      const response = {
+        success: true,
+        mode: mode,
+        contextual: true,
+        suggestions: suggestions,
+        analysis: {
+          questionType: questionAnalysis.type,
+          keywords: questionAnalysis.keywords,
+          seoScore: questionAnalysis.seoScore,
+          improvements: questionAnalysis.improvements,
+          existingQuestionsCount: questions.length,
+          duplicatesAvoided: questionAnalysis.duplicatesAvoided || 0
+        },
+        metadata: {
+          model: '@cf/meta/llama-3.1-8b-instruct',
+          neurons_used: 2, // Updated for Llama 3.1 8B
+          context_applied: websiteContext ? true : false,
+          page_url_provided: pageUrl ? true : false,
+          grammar_checked: true,
+          cached: false,
+          timestamp: new Date().toISOString(),
+          rate_limit: {
+            used: rateLimitResult.current + 1,
+            limit: 1000,
+            remaining: 999 - rateLimitResult.current
+          },
+          performance: {
+            total_duration: ((Date.now() - requestStartTime) / 1000).toFixed(2),
+            cache_check: cacheCheckDuration,
+            analysis: analysisDuration,
+            generation: generationDuration,
+            rate_limit: rateLimitDuration
+          }
+        }
+      };
+
+      // Cache the response
+      if (cacheKey) {
+        const cacheSetStart = Date.now();
+        await cacheResponse(cacheKey, response, env);
+        const cacheSetDuration = ((Date.now() - cacheSetStart) / 1000).toFixed(2);
+        console.log(`[Main Handler] Response cached in ${cacheSetDuration}s`);
+      }
+
+      const totalDuration = ((Date.now() - requestStartTime) / 1000).toFixed(2);
+      console.log(`[Main Handler] ======== Request completed successfully in ${totalDuration}s ========`);
+
+      return new Response(JSON.stringify(response), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+
     } catch (error) {
-      console.error('Enhanced Worker Error:', error);
+      const errorDuration = ((Date.now() - requestStartTime) / 1000).toFixed(2);
+      console.error(`[Main Handler] CRITICAL ERROR after ${errorDuration}s:`, error);
+      console.error(`[Main Handler] Error stack:`, error.stack);
+      
+      // Get request data safely for fallback
+      let questionsForFallback = [];
+      let modeForFallback = 'improve';
+      try {
+        const bodyText = await request.clone().text();
+        const parsedBody = JSON.parse(bodyText);
+        questionsForFallback = parsedBody.questions || [];
+        modeForFallback = parsedBody.mode || 'improve';
+      } catch (parseError) {
+        console.error(`[Main Handler] Could not parse request body for fallback:`, parseError);
+      }
+      
       return new Response(JSON.stringify({
         error: 'AI processing failed',
-        details: error.message
+        details: error.message,
+        contextual: true,
+        fallback: true,
+        suggestions: getFallbackSuggestions(questionsForFallback, modeForFallback),
+        debug: {
+          error_type: categorizeError(error),
+          duration: errorDuration,
+          timestamp: new Date().toISOString(),
+          questions_provided: questionsForFallback.length
+        }
       }), {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
-  },
+  }
 };
 
 /**
- * Enhanced Question Improvement with SEO Analysis
- * Uses Llama 4 Scout 17B for expert-level Position Zero optimization
+ * Generate enhanced typing suggestions with educational benefits
  */
-async function handleQuestionImprovement(question, answer, pageUrl, websiteContext, env, corsHeaders) {
-  // Estimate current question score for fallback handling
-  const estimatedCurrentScore = estimateQuestionSEOScore(question, answer);
-
-  // Fallback: Already optimized
-  if (estimatedCurrentScore > 85) {
-    return new Response(JSON.stringify({
-      success: true,
-      fallback: "already_optimized",
-      message: "Your question is already well-optimized! Here are minor refinements:",
-      options: generateMinorRefinements(question),
-      analysis: {
-        originalScore: estimatedCurrentScore,
-        improvements: ["Minor wording adjustments", "Enhanced readability"],
-        websiteRelevance: "Question maintains excellent SEO potential"
-      }
-    }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    });
+async function generateEnhancedTypingSuggestions(questions, currentAnswer, analysis, env, websiteContext) {
+  const stepStartTime = Date.now();
+  const primaryQuestion = questions[0];
+  console.log(`[Enhanced Typing] Starting generation for primary question: "${primaryQuestion.substring(0, 50)}..."`);
+  console.log(`[Enhanced Typing] Avoiding duplicates from ${questions.length} existing questions`);
+  
+  const cleanQuestion = primaryQuestion.trim();
+  
+  // If question is very short, provide smart autocomplete
+  if (cleanQuestion.length < 10) {
+    const suggestions = generateSmartAutocompleteSuggestions(cleanQuestion, analysis, websiteContext, questions);
+    const duration = ((Date.now() - stepStartTime) / 1000).toFixed(2);
+    console.log(`[Enhanced Typing] Autocomplete suggestions generated in ${duration}s`);
+    return suggestions;
   }
+  
+  // For longer questions, provide instant improvement hints with benefits
+  const prompt = buildEnhancedTypingPrompt(questions, currentAnswer, analysis, websiteContext);
+  console.log(`[Enhanced Typing] Prompt built, calling AI...`);
+  
+  const aiResult = await callAIWithRetry(env.AI, '@cf/meta/llama-3.1-8b-instruct', {
+    messages: [
+      { 
+        role: 'system', 
+        content: 'You MUST respond with ONLY a JSON array. Start immediately with [ and end with ]. No markdown, no explanations, no code blocks. Format: [{"text":"question","benefit":"benefit","reason":"reason"}]' 
+      },
+      { role: 'user', content: prompt }
+    ],
+    max_tokens: 300,  // ✅ INCREASED FURTHER TO PREVENT TRUNCATION
+    temperature: 0.2   // ✅ REDUCED FOR MORE CONSISTENT OUTPUT
+  }, 'Enhanced Typing');
 
-  // Fallback: Limited context
-  if (!answer && !websiteContext) {
-    return new Response(JSON.stringify({
-      success: true,
-      fallback: "limited_context",
-      message: "Limited context available. Here are general SEO improvements:",
-      options: generateGenericImprovements(question),
-      analysis: {
-        originalScore: estimatedCurrentScore,
-        improvements: ["SEO-friendly structure", "Search intent optimization"],
-        websiteRelevance: "General SEO best practices applied"
-      }
-    }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    });
-  }
-
-  // Advanced prompting for Llama 4 Scout 17B
-  const advancedPrompt = `You are a Google Search Quality Rater and senior SEO expert with 15 years of experience.
-
-ANALYZE AND IMPROVE THIS FAQ QUESTION:
-Original Question: "${question}"
-Current Answer: "${answer}"
-Website Context: ${websiteContext || 'Not provided'}
-Page URL: ${pageUrl || 'Not provided'}
-
-YOUR TASK: Create 3 improved question variations, each optimized for different SEO objectives.
-
-REQUIREMENTS FOR EACH OPTION:
-1. Question text (optimized for SEO and grammar)
-2. Primary SEO benefit (Featured Snippets, AI Answers, Position Zero, Voice Search, etc.)
-3. SEO score (0-100) based on ranking potential
-4. Specific explanation of why this version ranks better
-
-OPTIMIZATION FOCUS AREAS:
-- Featured Snippet potential (40-250 character answers)
-- Google AI Overview inclusion
-- Voice search compatibility ("How", "What", "Why" questions)
-- Position Zero ranking factors
-- Search intent matching (informational, commercial, navigational)
-- Keyword optimization for target terms
-- Grammar, punctuation, and readability
-- Natural conversational language
-
-SCORING CRITERIA:
-- 90-100: Excellent Position Zero potential with perfect grammar
-- 80-89: Strong Featured Snippet candidate with good readability
-- 70-79: Good search ranking potential with minor grammar improvements needed
-- 60-69: Decent with room for improvement in SEO and grammar
-- Below 60: Needs significant optimization for both SEO and readability
-
-GRAMMAR CONSIDERATIONS:
-- Proper capitalization and punctuation
-- Clear, concise wording without redundancy
-- Natural question flow for voice search
-- Professional tone appropriate for search results
-
-Return ONLY this JSON structure:
-{
-  "success": true,
-  "options": [
-    {
-      "question": "Optimized question text here?",
-      "seoScore": 85,
-      "primaryBenefit": "Featured Snippets",
-      "explanation": "Specific reason why this ranks better, including grammar improvements",
-      "targetKeywords": ["keyword1", "keyword2"],
-      "searchIntent": "informational"
-    },
-    {
-      "question": "Second optimized version?",
-      "seoScore": 78,
-      "primaryBenefit": "Voice Search",
-      "explanation": "Natural conversational phrasing with proper grammar for voice queries",
-      "targetKeywords": ["voice keyword1", "voice keyword2"],
-      "searchIntent": "informational"
-    },
-    {
-      "question": "Third optimized version?",
-      "seoScore": 82,
-      "primaryBenefit": "Grammar & Readability",
-      "explanation": "Improved grammar and structure for better user experience",
-      "targetKeywords": ["readability keyword1", "readability keyword2"],
-      "searchIntent": "informational"
-    }
-  ],
-  "analysis": {
-    "originalScore": ${estimatedCurrentScore},
-    "improvements": ["what was improved including grammar"],
-    "websiteRelevance": "how it matches the site context"
-  }
-}`;
-
-  try {
-    // Call Llama 4 Scout 17B for expert analysis
-    const response = await env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
-      messages: [
-        { 
-          role: 'system', 
-          content: 'You are an expert SEO analyst specializing in FAQ optimization for Position Zero, Featured Snippets, and AI-generated answers. Always respond with valid JSON only.' 
-        },
-        { role: 'user', content: advancedPrompt }
-      ],
-      max_tokens: 800,
-      temperature: 0.2 // Lower temperature for consistent, professional results
-    });
-
-    // Parse AI response
-    const result = parseEnhancedAIResponse(response.response);
-    
-    if (result && result.success && result.options && result.options.length >= 3) {
-      return new Response(JSON.stringify(result), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
-    } else {
-      throw new Error('Invalid AI response structure');
-    }
-
-  } catch (error) {
-    console.error('Llama 4 Scout 17B Error:', error);
-    
-    // Intelligent fallback with structured options
-    return new Response(JSON.stringify({
-      success: true,
-      fallback: "ai_error",
-      message: "AI enhancement temporarily unavailable. Here are optimized alternatives:",
-      options: generateIntelligentFallback(question, answer),
-      analysis: {
-        originalScore: estimatedCurrentScore,
-        improvements: ["SEO structure improvements", "Search intent optimization"],
-        websiteRelevance: "Fallback optimizations applied"
-      }
-    }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    });
+  const totalDuration = ((Date.now() - stepStartTime) / 1000).toFixed(2);
+  
+  if (aiResult.success) {
+    console.log(`[Enhanced Typing] AI call successful in ${aiResult.duration}s, parsing response...`);
+    const rawSuggestions = parseEnhancedResponse(aiResult.response.response, 'typing');
+    const filteredSuggestions = filterDuplicateSuggestions(rawSuggestions, analysis.duplicatePatterns, 'Enhanced Typing');
+    console.log(`[Enhanced Typing] Total step completed in ${totalDuration}s, returned ${filteredSuggestions.length} unique suggestions`);
+    return filteredSuggestions.length > 0 ? filteredSuggestions : getEnhancedTypingFallbacks(cleanQuestion, analysis, questions);
+  } else {
+    console.error(`[Enhanced Typing] AI failed after ${aiResult.duration}s: ${aiResult.error}`);
+    const fallbacks = getEnhancedTypingFallbacks(cleanQuestion, analysis, questions);
+    console.log(`[Enhanced Typing] Using ${fallbacks.length} fallback suggestions, total time: ${totalDuration}s`);
+    return fallbacks;
   }
 }
 
 /**
- * Parse enhanced AI response with robust error handling
+ * Generate enhanced improvement suggestions with educational benefits
  */
-function parseEnhancedAIResponse(aiResponse) {
-  if (!aiResponse) return null;
+async function generateEnhancedImprovementSuggestions(questions, currentAnswer, analysis, env, websiteContext) {
+  const stepStartTime = Date.now();
+  const primaryQuestion = questions[0];
+  console.log(`[Enhanced Improvement] Starting generation for primary question: "${primaryQuestion.substring(0, 50)}..."`);
+  console.log(`[Enhanced Improvement] Question analysis - Type: ${analysis.type}, SEO Score: ${analysis.seoScore}, Keywords: [${analysis.keywords.join(', ')}]`);
+  console.log(`[Enhanced Improvement] Avoiding duplicates from ${questions.length} existing questions`);
+  
+  const prompt = buildEnhancedImprovementPrompt(questions, currentAnswer, analysis, websiteContext);
+  console.log(`[Enhanced Improvement] Prompt built (${prompt.length} chars), calling AI...`);
+  
+  const aiResult = await callAIWithRetry(env.AI, '@cf/meta/llama-3.1-8b-instruct', {
+    messages: [
+      { 
+        role: 'system', 
+        content: 'You MUST respond with ONLY a JSON array. Start immediately with [ and end with ]. No markdown, no explanations, no code blocks. Format: [{"text":"question","benefit":"benefit","reason":"reason"}]' 
+      },
+      { role: 'user', content: prompt }
+    ],
+    max_tokens: 350,  // ✅ INCREASED FOR IMPROVEMENT SUGGESTIONS
+    temperature: 0.2   // ✅ REDUCED FOR CONSISTENCY
+  }, 'Enhanced Improvement');
 
-  try {
-    // Clean the response
-    let cleaned = aiResponse.trim();
+  const totalDuration = ((Date.now() - stepStartTime) / 1000).toFixed(2);
+  
+  if (aiResult.success) {
+    console.log(`[Enhanced Improvement] AI call successful in ${aiResult.duration}s, parsing response...`);
+    const rawSuggestions = parseEnhancedResponse(aiResult.response.response, 'improve');
+    const filteredSuggestions = filterDuplicateSuggestions(rawSuggestions, analysis.duplicatePatterns, 'Enhanced Improvement');
+    console.log(`[Enhanced Improvement] Total step completed in ${totalDuration}s, returned ${filteredSuggestions.length} unique suggestions`);
+    return filteredSuggestions.length > 0 ? filteredSuggestions : getEnhancedImprovementFallbacks(primaryQuestion, analysis, questions);
+  } else {
+    console.error(`[Enhanced Improvement] AI failed after ${aiResult.duration}s: ${aiResult.error}`);
+    const fallbacks = getEnhancedImprovementFallbacks(primaryQuestion, analysis, questions);
+    console.log(`[Enhanced Improvement] Using ${fallbacks.length} fallback suggestions, total time: ${totalDuration}s`);
+    return fallbacks;
+  }
+}
+
+/**
+ * Generate enhanced validation tips with educational benefits
+ */
+async function generateEnhancedValidationTips(questions, currentAnswer, analysis, env, websiteContext) {
+  const stepStartTime = Date.now();
+  const primaryQuestion = questions[0];
+  console.log(`[Enhanced Validation] Starting validation for primary question: "${primaryQuestion.substring(0, 50)}..."`);
+  console.log(`[Enhanced Validation] Analysis shows ${analysis.improvements.length} potential improvements: [${analysis.improvements.join(', ')}]`);
+  
+  const prompt = buildEnhancedValidationPrompt(questions, currentAnswer, analysis, websiteContext);
+  console.log(`[Enhanced Validation] Prompt built, calling AI for quality assessment...`);
+  
+  const aiResult = await callAIWithRetry(env.AI, '@cf/meta/llama-3.1-8b-instruct', {
+    messages: [
+      { 
+        role: 'system', 
+        content: 'You MUST respond with ONLY a JSON array. Start immediately with [ and end with ]. No markdown, no explanations, no code blocks. Format: [{"text":"tip","benefit":"benefit","reason":"reason"}]' 
+      },
+      { role: 'user', content: prompt }
+    ],
+    max_tokens: 300,  // ✅ INCREASED FOR VALIDATION TIPS
+    temperature: 0.1   // ✅ VERY LOW FOR CONSISTENT TIPS
+  }, 'Enhanced Validation');
+
+  const totalDuration = ((Date.now() - stepStartTime) / 1000).toFixed(2);
+  
+  if (aiResult.success) {
+    console.log(`[Enhanced Validation] AI call successful in ${aiResult.duration}s, parsing tips...`);
+    const suggestions = parseEnhancedResponse(aiResult.response.response, 'tips');
+    console.log(`[Enhanced Validation] Total step completed in ${totalDuration}s, returned ${suggestions.length} validation tips`);
+    return suggestions.length > 0 ? suggestions : getEnhancedValidationFallbacks(primaryQuestion, analysis, questions);
+  } else {
+    console.error(`[Enhanced Validation] AI failed after ${aiResult.duration}s: ${aiResult.error}`);
+    const fallbacks = getEnhancedValidationFallbacks(primaryQuestion, analysis, questions);
+    console.log(`[Enhanced Validation] Using ${fallbacks.length} fallback tips, total time: ${totalDuration}s`);
+    return fallbacks;
+  }
+}
+
+/**
+ * Robust AI call wrapper with retry logic and detailed timing
+ */
+async function callAIWithRetry(aiBinding, model, options, stepName, maxRetries = 3) {
+  const overallStartTime = Date.now();
+  console.log(`[AI Retry] Starting ${stepName} with model ${model}, max retries: ${maxRetries}`);
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const attemptStartTime = Date.now();
+    console.log(`[AI Retry] ${stepName} attempt ${attempt}/${maxRetries}...`);
     
-    // Remove common prefixes that might confuse JSON parsing
-    const prefixes = ['```json', '```', 'Here is', 'Here\'s', 'Response:', 'JSON:'];
-    for (const prefix of prefixes) {
-      if (cleaned.toLowerCase().startsWith(prefix.toLowerCase())) {
-        cleaned = cleaned.substring(prefix.length).trim();
-      }
-    }
-    
-    // Remove trailing markdown
-    cleaned = cleaned.replace(/```$/, '').trim();
-    
-    // Parse JSON
-    const parsed = JSON.parse(cleaned);
-    
-    // Validate structure
-    if (parsed.success && parsed.options && Array.isArray(parsed.options)) {
-      // Ensure all options have required fields
-      parsed.options = parsed.options.map(option => ({
-        question: option.question || 'Optimized question',
-        seoScore: Math.max(60, Math.min(100, parseInt(option.seoScore) || 75)),
-        primaryBenefit: option.primaryBenefit || 'SEO Optimization',
-        explanation: option.explanation || 'Improved for better search rankings',
-        targetKeywords: Array.isArray(option.targetKeywords) ? option.targetKeywords : ['seo', 'faq'],
-        searchIntent: option.searchIntent || 'informational'
-      }));
+    try {
+      const response = await aiBinding.run(model, options);
+      const attemptDuration = ((Date.now() - attemptStartTime) / 1000).toFixed(2);
+      const totalDuration = ((Date.now() - overallStartTime) / 1000).toFixed(2);
       
-      return parsed;
+      console.log(`[AI Retry] ${stepName} SUCCESS on attempt ${attempt} - Attempt: ${attemptDuration}s, Total: ${totalDuration}s`);
+      
+      return {
+        success: true,
+        response: response,
+        duration: totalDuration,
+        attempts: attempt,
+        error: null
+      };
+      
+    } catch (error) {
+      const attemptDuration = ((Date.now() - attemptStartTime) / 1000).toFixed(2);
+      const errorType = categorizeError(error);
+      
+      console.error(`[AI Retry] ${stepName} FAILED attempt ${attempt}/${maxRetries} (${attemptDuration}s) - ${errorType}: ${error.message}`);
+      
+      // If this was the last attempt, return failure
+      if (attempt === maxRetries) {
+        const totalDuration = ((Date.now() - overallStartTime) / 1000).toFixed(2);
+        console.error(`[AI Retry] ${stepName} EXHAUSTED all ${maxRetries} attempts in ${totalDuration}s - giving up`);
+        
+        return {
+          success: false,
+          response: null,
+          duration: totalDuration,
+          attempts: attempt,
+          error: `${errorType}: ${error.message}`
+        };
+      }
+      
+      // Calculate exponential backoff delay
+      const baseDelay = 1000; // 1 second
+      const backoffDelay = baseDelay * Math.pow(2, attempt - 1); // 1s, 2s, 4s
+      const jitter = Math.random() * 500; // Add up to 500ms jitter
+      const delay = backoffDelay + jitter;
+      
+      console.log(`[AI Retry] ${stepName} waiting ${(delay / 1000).toFixed(2)}s before retry ${attempt + 1}...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
-    
-    return null;
-    
-  } catch (error) {
-    console.error('JSON parsing error:', error);
-    return null;
   }
 }
 
 /**
- * Handle autocomplete mode (simplified for speed)
+ * Categorize errors for better debugging
  */
-async function handleQuestionAutocomplete(question, env, corsHeaders) {
-  const prompt = `Complete this FAQ question naturally: "${question}"
-Return only the completed question, nothing else.`;
+function categorizeError(error) {
+  const message = error.message?.toLowerCase() || '';
+  
+  if (message.includes('timeout') || message.includes('time out')) {
+    return 'TIMEOUT';
+  } else if (message.includes('rate limit') || message.includes('too many requests')) {
+    return 'RATE_LIMIT';
+  } else if (message.includes('network') || message.includes('fetch')) {
+    return 'NETWORK';
+  } else if (message.includes('model') || message.includes('binding')) {
+    return 'MODEL_ERROR';
+  } else if (message.includes('quota') || message.includes('usage')) {
+    return 'QUOTA_EXCEEDED';
+  } else {
+    return 'UNKNOWN';
+  }
+}
 
+/**
+ * Build prompts optimized for different contextual modes with duplicate prevention
+ */
+function buildEnhancedTypingPrompt(questions, currentAnswer, analysis, websiteContext) {
+  const primaryQuestion = questions[0];
+  const contextHint = websiteContext ? `Website context: ${websiteContext.substring(0, 100)}...` : '';
+  const typeHint = `Question type: ${analysis.type}`;
+  const keywordHint = analysis.keywords.length > 0 ? `Key terms: ${analysis.keywords.join(', ')}` : '';
+  const answerContext = currentAnswer ? `Current answer: ${currentAnswer.substring(0, 150)}...` : '';
+  
+  let existingQuestionsText = '';
+  if (questions.length > 1) {
+    existingQuestionsText = '\nEXISTING QUESTIONS TO AVOID:\n' + 
+      questions.map((q, i) => `${i + 1}. ${q}`).join('\n') + '\n';
+  }
+  
+  return `Return JSON array of 2 improved question suggestions. Each object must have "text", "benefit", and "reason" properties. ENSURE PERFECT GRAMMAR AND PUNCTUATION.
+
+Current question: "${primaryQuestion}"
+${contextHint}
+${typeHint}
+${keywordHint}
+${answerContext}
+SEO Score: ${analysis.seoScore}/100
+${existingQuestionsText}
+CRITICAL: Do NOT suggest any questions that are similar to the existing questions above.
+
+Focus on making questions more specific and SEO-friendly while being completely different from existing questions. Ensure all suggestions have perfect grammar, proper punctuation, and professional language.
+
+Example format:
+[
+  {
+    "text": "How can I optimize my website for better search rankings?",
+    "benefit": "More specific targeting",
+    "reason": "Focuses on concrete outcome users want"
+  }
+]`;
+}
+
+function buildEnhancedImprovementPrompt(questions, currentAnswer, analysis, websiteContext) {
+  const primaryQuestion = questions[0];
+  const contextHint = websiteContext ? `Website context: ${websiteContext.substring(0, 150)}...` : '';
+  const improvementHints = analysis.improvements.length > 0 ? `Needs: ${analysis.improvements.join(', ')}` : '';
+  const answerContext = currentAnswer ? `Current answer: ${currentAnswer.substring(0, 200)}...` : '';
+  
+  let existingQuestionsText = '';
+  if (questions.length > 1) {
+    existingQuestionsText = '\nEXISTING QUESTIONS TO AVOID:\n' + 
+      questions.map((q, i) => `${i + 1}. ${q}`).join('\n') + '\n';
+  }
+  
+  return `Return JSON array of 3 enhanced question versions. Each object must have "text", "benefit", and "reason" properties. ENSURE PERFECT GRAMMAR AND PUNCTUATION.
+
+Question: "${primaryQuestion}"
+${contextHint}
+Type: ${analysis.type} | SEO Score: ${analysis.seoScore}/100
+${improvementHints}
+${answerContext}
+${existingQuestionsText}
+CRITICAL: Your suggestions must be completely different from all existing questions listed above.
+
+Make them more SEO-friendly, specific, and user-focused while ensuring they are unique and not similar to existing questions. All suggestions must have perfect grammar, proper punctuation, and professional language.
+
+Example format:
+[
+  {
+    "text": "What are the most effective SEO strategies for small businesses?",
+    "benefit": "Better keyword targeting",
+    "reason": "Long-tail keywords improve search visibility"
+  }
+]`;
+}
+
+function buildEnhancedValidationPrompt(questions, currentAnswer, analysis, websiteContext) {
+  const primaryQuestion = questions[0];
+  const contextHint = websiteContext ? `Website: ${websiteContext.substring(0, 100)}...` : '';
+  const issueHints = analysis.improvements.length > 0 ? `Issues found: ${analysis.improvements.join(', ')}` : 'Generally good structure';
+  const answerContext = currentAnswer ? `Current answer: ${currentAnswer.substring(0, 150)}...` : '';
+  
+  return `Return JSON array of 3 improvement tips. Each object must have "text", "benefit", and "reason" properties. ENSURE PERFECT GRAMMAR AND PUNCTUATION.
+
+Question to improve: "${primaryQuestion}"
+${contextHint}
+Current SEO Score: ${analysis.seoScore}/100
+${issueHints}
+${answerContext}
+Existing questions count: ${questions.length}
+
+Focus on what will help users and search engines most. All tips must have perfect grammar, proper punctuation, and professional language.
+
+Example format:
+[
+  {
+    "text": "Add more specific keywords that users actually search for",
+    "benefit": "Better discoverability",
+    "reason": "Specific terms help search engines understand your content"
+  }
+]`;
+}
+
+/**
+ * ENHANCED JSON PARSING WITH MARKDOWN CLEANUP (IMPROVED)
+ */
+function parseEnhancedResponse(aiResponse, mode) {
+  if (!aiResponse || typeof aiResponse !== 'string') {
+    console.error(`[Parse Enhanced ${mode}] ❌ Invalid response type:`, typeof aiResponse);
+    return getFallbackSuggestions_Fixed(mode);
+  }
+
+  console.log(`[Parse Enhanced ${mode}] Raw response (${aiResponse.length} chars):`, aiResponse.substring(0, 200));
+
+  let cleaned = aiResponse.trim();
+  
+  // AGGRESSIVE CLEANUP: Remove common AI response patterns
+  cleaned = cleaned
+    // Remove markdown code blocks
+    .replace(/```json\s*/gi, '')
+    .replace(/```\s*/g, '')
+    // Remove explanatory text before JSON
+    .replace(/^.*?(?=\[)/s, '')
+    // Remove "Here's" type introductions
+    .replace(/^Here's.*?:\s*/gi, '')
+    .replace(/^.*?JSON.*?format.*?:\s*/gi, '')
+    .replace(/^.*?array.*?:\s*/gi, '')
+    // Clean up any remaining text before [
+    .replace(/^[^[]*/, '')
+    .trim();
+
+  console.log(`[Parse Enhanced ${mode}] Cleaned response (${cleaned.length} chars):`, cleaned.substring(0, 150));
+  
+  // Find JSON boundaries
+  let jsonStart = cleaned.indexOf('[');
+  let jsonEnd = cleaned.lastIndexOf(']');
+  
+  // If we can't find complete brackets, try to find partial JSON
+  if (jsonStart === -1 || jsonEnd === -1 || jsonEnd <= jsonStart) {
+    console.warn(`[Parse Enhanced ${mode}] ❌ No complete JSON brackets found after cleanup`);
+    return tryAdvancedExtraction(cleaned, mode);
+  }
+  
+  const jsonText = cleaned.substring(jsonStart, jsonEnd + 1);
+  console.log(`[Parse Enhanced ${mode}] Extracted JSON (${jsonText.length} chars):`, jsonText.substring(0, 150));
+  
   try {
-    const response = await env.AI.run('@cf/meta/llama-3.2-1b-instruct', {
-      messages: [
-        { role: 'system', content: 'Complete FAQ questions naturally and concisely.' },
-        { role: 'user', content: prompt }
-      ],
-      max_tokens: 50,
-      temperature: 0.3
-    });
-
-    const completion = response.response?.trim() || question;
+    const parsed = JSON.parse(jsonText);
+    console.log(`[Parse Enhanced ${mode}] ✅ JSON parsing successful - ${parsed.length} items found`);
     
-    return new Response(JSON.stringify({
-      success: true,
-      suggestions: [completion]
-    }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    });
-
-  } catch (error) {
-    return new Response(JSON.stringify({
-      success: true,
-      suggestions: [question + '?']
-    }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    });
+    // Validate and clean structure
+    const validated = parsed
+      .filter(item => item && typeof item === 'object' && item.text && item.benefit && item.reason)
+      .map(item => ({
+        text: improveGrammar(String(item.text).trim()),
+        benefit: improveGrammar(String(item.benefit).trim()),
+        reason: improveGrammar(String(item.reason).trim()),
+        type: mode === 'tips' ? 'tip' : 'suggestion'
+      }))
+      .filter(item => item.text.length > 5 && item.text.length < 300);
+    
+    console.log(`[Parse Enhanced ${mode}] ✅ Validated ${validated.length} suggestions`);
+    return validated.length > 0 ? validated : getFallbackSuggestions_Fixed(mode);
+    
+  } catch (jsonError) {
+    console.error(`[Parse Enhanced ${mode}] ❌ JSON parse error:`, jsonError.message);
+    console.log(`[Parse Enhanced ${mode}] Failed JSON:`, jsonText.substring(0, 150));
+    
+    // Try advanced extraction as fallback
+    return tryAdvancedExtraction(cleaned, mode);
   }
 }
 
 /**
- * Handle validation mode (simplified)
+ * ADVANCED EXTRACTION METHODS (IMPROVED)
  */
-async function handleQuestionValidation(question, env, corsHeaders) {
-  const tips = [
-    'Use natural, conversational language',
-    'Include relevant keywords',
-    'Keep it clear and specific',
-    'Consider voice search patterns'
+function tryAdvancedExtraction(text, mode) {
+  console.log(`[Parse Enhanced ${mode}] 🔄 Trying advanced extraction methods`);
+  
+  // Method 1: Extract JSON objects with regex
+  const objectPattern = /\{\s*"text"\s*:\s*"([^"]+)"\s*,\s*"benefit"\s*:\s*"([^"]+)"\s*,\s*"reason"\s*:\s*"([^"]+)"\s*\}/g;
+  const objectMatches = [...text.matchAll(objectPattern)];
+  
+  if (objectMatches.length > 0) {
+    console.log(`[Parse Enhanced ${mode}] ✅ Method 1: Found ${objectMatches.length} complete JSON objects`);
+    return objectMatches.map(match => ({
+      text: improveGrammar(match[1].trim()),
+      benefit: improveGrammar(match[2].trim()),
+      reason: improveGrammar(match[3].trim()),
+      type: mode === 'tips' ? 'tip' : 'suggestion'
+    }));
+  }
+  
+  // Method 2: Extract partial objects and reconstruct
+  const textPattern = /"text"\s*:\s*"([^"]+)"/gi;
+  const benefitPattern = /"benefit"\s*:\s*"([^"]+)"/gi;
+  const reasonPattern = /"reason"\s*:\s*"([^"]+)"/gi;
+  
+  const texts = [...text.matchAll(textPattern)];
+  const benefits = [...text.matchAll(benefitPattern)];
+  const reasons = [...text.matchAll(reasonPattern)];
+  
+  if (texts.length > 0 && benefits.length > 0 && reasons.length > 0) {
+    console.log(`[Parse Enhanced ${mode}] ✅ Method 2: Reconstructing from ${Math.min(texts.length, benefits.length, reasons.length)} partial objects`);
+    
+    const reconstructed = [];
+    const maxItems = Math.min(texts.length, benefits.length, reasons.length, 3);
+    
+    for (let i = 0; i < maxItems; i++) {
+      reconstructed.push({
+        text: improveGrammar(texts[i][1].trim()),
+        benefit: improveGrammar(benefits[i][1].trim()),
+        reason: improveGrammar(reasons[i][1].trim()),
+        type: mode === 'tips' ? 'tip' : 'suggestion'
+      });
+    }
+    
+    return reconstructed;
+  }
+  
+  // Method 3: Extract questions and create generic structure
+  const questionPatterns = [
+    /(How|What|Why|When|Where)\s+[^?\n]*\?/gi,
+    /"([^"]*\?[^"]*)"/gi
   ];
+  
+  for (const pattern of questionPatterns) {
+    const matches = [...text.matchAll(pattern)];
+    if (matches.length > 0) {
+      console.log(`[Parse Enhanced ${mode}] ✅ Method 3: Found ${matches.length} question patterns`);
+      return matches.slice(0, 3).map(match => ({
+        text: improveGrammar(match[1] || match[0]),
+        benefit: mode === 'tips' ? 'Improvement tip' : 'Enhanced version',
+        reason: 'Better structure and clarity',
+        type: mode === 'tips' ? 'tip' : 'suggestion'
+      }));
+    }
+  }
+  
+  console.warn(`[Parse Enhanced ${mode}] ❌ All advanced extraction methods failed`);
+  return getFallbackSuggestions_Fixed(mode);
+}
 
-  return new Response(JSON.stringify({
-    success: true,
-    suggestions: tips
-  }), {
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+/**
+ * BETTER FALLBACK SUGGESTIONS (FIXED)
+ */
+function getFallbackSuggestions_Fixed(mode) {
+  const fallbacks = {
+    typing: [
+      {
+        text: "Consider adding more specific details to your question",
+        benefit: "Better targeting",
+        reason: "Specific questions help users find exactly what they need",
+        type: "suggestion"
+      }
+    ],
+    improve: [
+      {
+        text: "Try starting with 'How', 'What', or 'Why' for better SEO",
+        benefit: "Voice search optimization",
+        reason: "Question words help voice assistants understand intent",
+        type: "suggestion"
+      }
+    ],
+    tips: [
+      {
+        text: "End questions with a question mark (?)",
+        benefit: "Better recognition",
+        reason: "Search engines identify questions by question marks",
+        type: "tip"
+      }
+    ]
+  };
+  
+  return fallbacks[mode] || fallbacks.improve;
+}
+
+/**
+ * Enhanced fallback suggestions with educational benefits and duplicate prevention
+ */
+function generateSmartAutocompleteSuggestions(partial, analysis, websiteContext, existingQuestions) {
+  const lowerPartial = partial.toLowerCase();
+  
+  // Smart autocomplete based on common patterns
+  const smartSuggestions = [
+    { 
+      text: improveGrammar('How do I ' + lowerPartial + '...'), 
+      benefit: 'Action-oriented format',
+      reason: 'Users prefer step-by-step guidance',
+      type: 'suggestion'
+    },
+    { 
+      text: improveGrammar('What is ' + lowerPartial + '...'), 
+      benefit: 'Clear definition format',
+      reason: 'Perfect for featured snippets',
+      type: 'suggestion'
+    },
+    { 
+      text: improveGrammar('Why should I ' + lowerPartial + '...'), 
+      benefit: 'Benefit-focused approach',
+      reason: 'Addresses user motivation',
+      type: 'suggestion'
+    }
+  ];
+  
+  // Filter out duplicates
+  const duplicatePatterns = (existingQuestions || []).map(q => ({
+    original: q,
+    normalized: normalizeQuestionForComparison(q),
+    keywords: extractKeywordsForComparison(q)
+  }));
+  
+  const filtered = filterDuplicateSuggestions(smartSuggestions, duplicatePatterns, 'Autocomplete');
+  return filtered.slice(0, 2);
+}
+
+function getEnhancedTypingFallbacks(question, analysis, existingQuestions) {
+  const suggestions = [];
+  
+  if (!analysis.hasQuestionMark) {
+    suggestions.push({
+      text: improveGrammar(question + '?'),
+      benefit: 'Proper question format',
+      reason: 'Search engines prefer questions with question marks',
+      type: 'suggestion'
+    });
+  }
+  
+  if (analysis.length < 20) {
+    suggestions.push({
+      text: improveGrammar('Add more specific details to: "' + question + '"'),
+      benefit: 'Better targeting',
+      reason: 'Specific questions rank higher in search results',
+      type: 'tip'
+    });
+  }
+  
+  // Filter out duplicates
+  const duplicatePatterns = (existingQuestions || []).map(q => ({
+    original: q,
+    normalized: normalizeQuestionForComparison(q),
+    keywords: extractKeywordsForComparison(q)
+  }));
+  
+  const filtered = filterDuplicateSuggestions(suggestions, duplicatePatterns, 'Typing Fallbacks');
+  return filtered.slice(0, 2);
+}
+
+function getEnhancedImprovementFallbacks(question, analysis, existingQuestions) {
+  const suggestions = [];
+  
+  // SEO-focused improvements
+  if (analysis.type === 'general') {
+    suggestions.push({
+      text: improveGrammar('How to ' + question.toLowerCase().replace(/\?$/, '').replace(/^(how|what|why|when|where)\s+/i, '') + ' effectively?'),
+      benefit: 'Better search visibility',
+      reason: '"How to" questions perform well in voice search',
+      type: 'suggestion'
+    });
+  }
+  
+  // Keyword optimization
+  if (analysis.keywords.length > 0) {
+    suggestions.push({
+      text: improveGrammar('What are the best practices for ' + analysis.keywords.join(' ') + '?'),
+      benefit: 'Keyword optimization',
+      reason: 'Targets your main topics for better SEO',
+      type: 'suggestion'
+    });
+  }
+  
+  // User-focused version
+  suggestions.push({
+    text: improveGrammar('How can I ' + question.toLowerCase().replace(/^(how|what|why|when|where)\s+/i, '').replace(/\?$/, '') + ' successfully?'),
+    benefit: 'User-focused approach',
+    reason: 'Emphasizes practical value for users',
+    type: 'suggestion'
   });
+  
+  // Filter out duplicates
+  const duplicatePatterns = (existingQuestions || []).map(q => ({
+    original: q,
+    normalized: normalizeQuestionForComparison(q),
+    keywords: extractKeywordsForComparison(q)
+  }));
+  
+  const filtered = filterDuplicateSuggestions(suggestions, duplicatePatterns, 'Improvement Fallbacks');
+  return filtered.slice(0, 3);
 }
 
-/**
- * Estimate current question SEO score for fallback logic
- */
-function estimateQuestionSEOScore(question, answer) {
-  let score = 50; // Base score
+function getEnhancedValidationFallbacks(question, analysis, existingQuestions) {
+  const tips = [];
   
-  // Length optimization
-  if (question.length >= 10 && question.length <= 100) score += 10;
-  
-  // Question words (good for voice search)
-  if (/^(how|what|why|when|where|which|who|can|do|does|is|are|will)/i.test(question)) score += 15;
-  
-  // Ends with question mark
-  if (question.endsWith('?')) score += 10;
-  
-  // Has answer (context available)
-  if (answer && answer.length > 20) score += 15;
-  
-  // Grammar and readability bonus
-  const grammarScore = checkBasicGrammar(question);
-  score += grammarScore;
-  
-  return Math.min(100, score);
-}
-
-/**
- * Check basic grammar and readability issues
- * Returns bonus points (0-10) for good grammar
- */
-function checkBasicGrammar(question) {
-  let grammarScore = 0;
-  const issues = [];
-  
-  // Check capitalization
-  if (question.charAt(0) === question.charAt(0).toUpperCase()) {
-    grammarScore += 2;
-  } else {
-    issues.push('Should start with capital letter');
-  }
-  
-  // Check for double spaces
-  if (!question.includes('  ')) {
-    grammarScore += 1;
-  } else {
-    issues.push('Contains double spaces');
-  }
-  
-  // Check for proper question punctuation
-  if (question.endsWith('?')) {
-    grammarScore += 2;
-  } else if (question.trim().length > 0) {
-    issues.push('Missing question mark');
-  }
-  
-  // Check for common grammar issues
-  const commonMistakes = [
-    { pattern: /\bthere\s+is\s+\d+\s+\w+s\b/i, issue: "Subject-verb disagreement (there is + plural)" },
-    { pattern: /\bit's\s+\w+ing\b/i, issue: "Possible its/it's confusion" },
-    { pattern: /\byour\s+(doing|going|coming)\b/i, issue: "Possible your/you're confusion" },
-    { pattern: /\bwho's\s+\w+\b/i, issue: "Possible who's/whose confusion" }
-  ];
-  
-  let hasGrammarIssues = false;
-  for (const mistake of commonMistakes) {
-    if (mistake.pattern.test(question)) {
-      issues.push(mistake.issue);
-      hasGrammarIssues = true;
+  analysis.improvements.forEach(improvement => {
+    switch (improvement) {
+      case 'Add question mark':
+        tips.push({
+          text: improveGrammar('End with a question mark (?)'),
+          benefit: 'Better recognition',
+          reason: 'Search engines identify questions by question marks',
+          type: 'tip'
+        });
+        break;
+      case 'Add more specific details':
+        tips.push({
+          text: improveGrammar('Include more specific details'),
+          benefit: 'Better targeting',
+          reason: 'Specific questions help users find exactly what they need',
+          type: 'tip'
+        });
+        break;
+      case 'Include more relevant keywords':
+        tips.push({
+          text: improveGrammar('Add keywords your users search for'),
+          benefit: 'Improved discoverability',
+          reason: 'More keywords = better search engine visibility',
+          type: 'tip'
+        });
+        break;
+      case 'Start with question word':
+        tips.push({
+          text: improveGrammar('Start with "How", "What", or "Why"'),
+          benefit: 'Voice search optimization',
+          reason: 'Voice assistants prefer questions starting with question words',
+          type: 'tip'
+        });
+        break;
     }
-  }
+  });
   
-  // Bonus for no common grammar issues
-  if (!hasGrammarIssues) {
-    grammarScore += 3;
-  }
-  
-  // Check word count (reasonable question length)
-  const wordCount = question.trim().split(/\s+/).length;
-  if (wordCount >= 3 && wordCount <= 15) {
-    grammarScore += 2; // Good length
-  } else if (wordCount > 20) {
-    issues.push('Question too long for optimal readability');
-  } else if (wordCount < 3) {
-    issues.push('Question too short');
-  }
-  
-  return Math.max(0, grammarScore);
-}
-
-/**
- * Generate grammar-improved versions of questions
- */
-function improveQuestionGrammar(question) {
-  let improved = question.trim();
-  
-  // Fix capitalization
-  if (improved.length > 0) {
-    improved = improved.charAt(0).toUpperCase() + improved.slice(1);
-  }
-  
-  // Fix double spaces
-  improved = improved.replace(/\s+/g, ' ');
-  
-  // Ensure question mark
-  if (!improved.endsWith('?') && !improved.endsWith('.')) {
-    improved += '?';
-  }
-  
-  // Fix common grammar issues
-  improved = improved.replace(/\bthere\s+is\s+(\d+)\s+(\w+s)\b/gi, 'there are $1 $2');
-  improved = improved.replace(/\byour\s+(doing|going|coming)\b/gi, "you're $1");
-  
-  return improved;
-}
-
-/**
- * Generate minor refinements for already optimized questions
- */
-function generateMinorRefinements(question) {
-  const grammarImproved = improveQuestionGrammar(question);
-  const baseQuestion = grammarImproved !== question ? grammarImproved : question;
-  
-  return [
+  return tips.length > 0 ? tips : [
     {
-      question: baseQuestion.replace(/\b(a|an|the)\b/gi, '').replace(/\s+/g, ' ').trim(),
-      seoScore: 88,
-      primaryBenefit: "Conciseness",
-      explanation: "Removed unnecessary articles for tighter phrasing",
-      targetKeywords: ["concise", "focused"],
-      searchIntent: "informational"
-    },
-    {
-      question: baseQuestion.endsWith('?') ? baseQuestion : baseQuestion + '?',
-      seoScore: 86,
-      primaryBenefit: "Voice Search",
-      explanation: "Ensured proper question format for voice queries",
-      targetKeywords: ["voice", "question"],
-      searchIntent: "informational"
-    },
-    {
-      question: grammarImproved,
-      seoScore: 87,
-      primaryBenefit: "Grammar & Readability",
-      explanation: "Improved grammar and readability for better user experience",
-      targetKeywords: ["grammar", "readability"],
-      searchIntent: "informational"
+      text: improveGrammar('Consider your target audience'),
+      benefit: 'Better user focus',
+      reason: 'Questions that match user intent perform better',
+      type: 'tip'
     }
   ];
 }
 
+function getFallbackSuggestions(questions, mode) {
+  if (!questions || questions.length === 0) return [];
+  
+  return [{
+    text: improveGrammar('Please try again - temporary processing issue'),
+    benefit: 'System recovery',
+    reason: 'Our AI service is temporarily unavailable',
+    type: 'fallback'
+  }];
+}
+
 /**
- * Generate generic improvements for limited context
+ * FIXED CACHE KEY GENERATION - More Stable Hashing
  */
-function generateGenericImprovements(question) {
-  const grammarImproved = improveQuestionGrammar(question);
-  const cleanQuestion = question.replace(/\?$/, '').toLowerCase().trim();
+function createCacheKey(questions, mode, websiteContext) {
+  if (!questions || questions.length === 0) {
+    return null; // Don't cache if no questions
+  }
   
-  // Smart question transformation based on question type
-  let alternativeQuestions = [];
+  const primaryQuestion = questions[0] || '';
+  const questionCount = questions.length;
+  const contextHash = websiteContext ? websiteContext.substring(0, 30) : '';
   
-  // If it's a "how to" question, create variations
-  if (/^(how\s+(do|can|to)|how\s+.*(improve|get|make|create|build))/i.test(cleanQuestion)) {
-    const actionMatch = cleanQuestion.match(/improve|get|make|create|build|increase|optimize|fix|enhance/i);
-    const action = actionMatch ? actionMatch[0] : 'improve';
-    const topic = cleanQuestion.replace(/^how\s+(do|can|to)\s*(i\s*)?/i, '').replace(action, '').trim();
+  // Create more stable hash by normalizing inputs
+  const normalizedQuestion = primaryQuestion.toLowerCase().trim().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '_');
+  const normalizedContext = contextHash.toLowerCase().replace(/[^a-z0-9]/g, '');
+  
+  // Create stable cache input
+  const cacheInput = `${normalizedQuestion}_${questionCount}_${mode}_${normalizedContext}`;
+  
+  // Simple hash function that's consistent
+  let hash = 0;
+  for (let i = 0; i < cacheInput.length; i++) {
+    const char = cacheInput.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  
+  const cacheKey = `faq_${mode}_${Math.abs(hash).toString(36)}`;
+  console.log(`[Cache] Generated stable cache key: ${cacheKey}`);
+  console.log(`[Cache] Cache input: ${cacheInput.substring(0, 80)}...`);
+  
+  return cacheKey;
+}
+
+
+
+async function getCachedResponse(cacheKey, env) {
+  const startTime = Date.now();
+  
+  // Add cache debugging
+  console.log(`[Cache Debug] Attempting to retrieve cache key: ${cacheKey}`);
+  console.log(`[Cache Debug] KV binding available: ${env.FAQ_CACHE ? 'Yes' : 'No'}`);
+  
+  try {
+    const cached = await env.FAQ_CACHE?.get(cacheKey, { type: 'json' });
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     
-    alternativeQuestions = [
-      `What are the best ways to ${action} ${topic}?`,
-      `How can I effectively ${action} ${topic}?`
-    ];
-  }
-  // If it's a "what is" question, create variations  
-  else if (/^what\s+(is|are)/i.test(cleanQuestion)) {
-    const topic = cleanQuestion.replace(/^what\s+(is|are)\s*/i, '');
-    alternativeQuestions = [
-      `How does ${topic} work?`,
-      `Why is ${topic} important?`
-    ];
-  }
-  // Generic fallbacks for other question types
-  else {
-    alternativeQuestions = [
-      `What should I know about ${cleanQuestion}?`,
-      `How can ${cleanQuestion} help me?`
-    ];
-  }
-  
-  return [
-    {
-      question: alternativeQuestions[0] || grammarImproved,
-      seoScore: 75,
-      primaryBenefit: "Featured Snippets",
-      explanation: "Restructured for better search snippet potential",
-      targetKeywords: ["best ways", "how to"],
-      searchIntent: "informational"
-    },
-    {
-      question: alternativeQuestions[1] || grammarImproved,
-      seoScore: 72,
-      primaryBenefit: "Voice Search",
-      explanation: "Natural conversational phrasing for voice queries",
-      targetKeywords: ["how can", "effectively"],
-      searchIntent: "informational"
-    },
-    {
-      question: grammarImproved,
-      seoScore: 70,
-      primaryBenefit: "Grammar Correction",
-      explanation: "Fixed grammar and formatting issues for better readability",
-      targetKeywords: ["grammar", "corrected"],
-      searchIntent: "informational"
+    console.log(`[Cache Debug] Raw cached result: ${cached ? 'Found' : 'Not found'}`);
+    
+    if (cached && cached.metadata && cached.metadata.timestamp) { // ✅ ENHANCED: Check metadata.timestamp
+      const age = Date.now() - new Date(cached.metadata.timestamp).getTime();
+      const ageInMinutes = (age / 60000).toFixed(1);
+      
+      console.log(`[Cache Debug] Cache age: ${ageInMinutes} minutes`);
+      
+      // Cache for 1 hour
+      if (age < 3600000) {
+        console.log(`[Cache] ✅ Retrieved valid cached response in ${duration}s (age: ${ageInMinutes} minutes)`);
+        cached.metadata.cached = true;
+        cached.metadata.cache_age_minutes = ageInMinutes;
+        return cached;
+      } else {
+        console.log(`[Cache] ⚠️ Found expired cached response in ${duration}s (age: ${ageInMinutes} minutes) - discarding`);
+        // Clean up expired cache
+        await env.FAQ_CACHE?.delete(cacheKey);
+        console.log(`[Cache Debug] Expired cache entry deleted`);
+      }
+    } else if (cached) {
+      console.log(`[Cache Debug] ⚠️ Cache found but missing timestamp in metadata - discarding malformed cache`);
+      // Clean up malformed cache
+      await env.FAQ_CACHE?.delete(cacheKey);
+      console.log(`[Cache Debug] Malformed cache entry deleted`);
+    } else {
+      console.log(`[Cache] ℹ️ No cached response found in ${duration}s`);
     }
-  ];
+  } catch (error) {
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.error(`[Cache] ❌ Error retrieving cache in ${duration}s:`, error);
+  }
+  return null;
+}
+
+// CACHE FIX: Find this section in your worker (around line 750-780)
+
+async function cacheResponse(cacheKey, response, env) {
+  const startTime = Date.now();
+  
+  console.log(`[Cache Debug] Attempting to cache with key: ${cacheKey}`);
+  console.log(`[Cache Debug] KV binding available: ${env.FAQ_CACHE ? 'Yes' : 'No'}`);
+  console.log(`[Cache Debug] Response size: ${JSON.stringify(response).length} chars`);
+  
+  try {
+    // Add cache metadata
+    response.metadata.cache_key = cacheKey;
+    response.metadata.timestamp = new Date().toISOString(); // ✅ FIXED: Use 'timestamp' not 'cached_at'
+    
+    // Cache for 1 hour
+    await env.FAQ_CACHE?.put(cacheKey, JSON.stringify(response), { expirationTtl: 3600 });
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log(`[Cache] ✅ Response cached successfully in ${duration}s (TTL: 1 hour)`);
+    
+    // Verify the cache was set
+    const verification = await env.FAQ_CACHE?.get(cacheKey, { type: 'json' });
+    console.log(`[Cache Debug] Cache verification: ${verification ? 'Success' : 'Failed'}`);
+    
+  } catch (error) {
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.error(`[Cache] ❌ Error setting cache in ${duration}s:`, error);
+  }
 }
 
 /**
- * Generate intelligent fallback when AI fails
+ * Enhanced rate limiting with high limits for contextual usage
  */
-function generateIntelligentFallback(question, answer) {
-  const grammarImproved = improveQuestionGrammar(question);
+async function checkRateLimit(clientIP, env) {
+  const startTime = Date.now();
+  const key = `contextual_rate_${clientIP}_${new Date().toISOString().split('T')[0]}`;
   
-  return [
-    {
-      question: grammarImproved,
-      seoScore: 68,
-      primaryBenefit: "Grammar & Readability",
-      explanation: "Improved grammar, capitalization and punctuation",
-      targetKeywords: ["professional", "readable"],
-      searchIntent: "informational"
-    },
-    {
-      question: question.endsWith('?') ? question : question + '?',
-      seoScore: 65,
-      primaryBenefit: "Question Format",
-      explanation: "Proper question punctuation for search engines",
-      targetKeywords: ["question", "format"],
-      searchIntent: "informational"
-    },
-    {
-      question: `${grammarImproved.replace(/\?$/, '')} - Complete Guide`,
-      seoScore: 70,
-      primaryBenefit: "Long-tail SEO",
-      explanation: "Added guide suffix for comprehensive content targeting",
-      targetKeywords: ["complete guide", "comprehensive"],
-      searchIntent: "informational"
+  try {
+    const current = await env.FAQ_RATE_LIMITS?.get(key);
+    const count = current ? parseInt(current) : 0;
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    
+    // High limit: 1000 requests per day for contextual suggestions
+    const isBlocked = count >= 1000;
+    
+    let resetTime = null;
+    if (isBlocked) {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(0, 0, 0, 0);
+      resetTime = tomorrow.toISOString();
     }
-  ];
+    
+    console.log(`[Rate Limit] Check completed in ${duration}s - IP: ${clientIP}, Usage: ${count}/1000, Blocked: ${isBlocked}`);
+    
+    return { blocked: isBlocked, current: count, resetTime };
+  } catch (error) {
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.error(`[Rate Limit] Check error in ${duration}s:`, error);
+    return { blocked: false, current: 0, resetTime: null };
+  }
+}
+
+async function updateRateLimit(clientIP, env) {
+  const startTime = Date.now();
+  const key = `contextual_rate_${clientIP}_${new Date().toISOString().split('T')[0]}`;
+  
+  try {
+    const current = await env.FAQ_RATE_LIMITS?.get(key);
+    const count = current ? parseInt(current) + 1 : 1;
+    
+    // Set expiry to end of day
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    tomorrow.setHours(0, 0, 0, 0);
+    const ttl = Math.floor((tomorrow.getTime() - Date.now()) / 1000);
+    
+    await env.FAQ_RATE_LIMITS?.put(key, count.toString(), { expirationTtl: ttl });
+    
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log(`[Rate Limit] Updated in ${duration}s - IP: ${clientIP}, New count: ${count}/1000`);
+  } catch (error) {
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.error(`[Rate Limit] Update error in ${duration}s:`, error);
+  }
 }
