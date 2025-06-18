@@ -1,11 +1,13 @@
 import { parse } from 'node-html-parser';
+import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
 
 /**
- * Enhanced FAQ Schema Extraction Proxy Worker with Debug Logging
+ * Enhanced FAQ Schema Extraction Proxy Worker with Enhanced Rate Limiting
  * - Handles nested schemas, comments, multiple formats
  * - Processes images with verification
  * - Robust HTML sanitization
  * - Comprehensive metadata and warnings
+ * - Enhanced IP-based rate limiting with violation tracking and progressive penalties
  * - EXTENSIVE DEBUG LOGGING
  * - Updated for modern ES modules format
  */
@@ -39,12 +41,23 @@ async function handleRequest(request, env, ctx) {
         status: 'healthy',
         service: 'faq-proxy-fetch',
         timestamp: new Date().toISOString(),
-        version: '1.0.0',
-        features: ['faq_extraction', 'schema_parsing', 'json_ld', 'microdata', 'rdfa'],
+        version: '1.0.0-enhanced-rate-limiting',
+        features: ['faq_extraction', 'schema_parsing', 'json_ld', 'microdata', 'rdfa', 'enhanced_rate_limiting', 'ip_management'],
         rate_limits: {
-          daily_limit: 100,
+          hourly: 25,
+          daily: 100,
+          weekly: 500,
+          monthly: 2000,
           per_request_timeout: '10s'
-        }
+        },
+        capabilities: [
+          'multi_tier_rate_limiting',
+          'ip_whitelist_blacklist',
+          'violation_tracking',
+          'progressive_penalties',
+          'geographic_restrictions',
+          'origin_validation'
+        ]
       }), {
         status: 200,
         headers: { ...cors, 'Content-Type': 'application/json' }
@@ -93,71 +106,93 @@ async function handleRequest(request, env, ctx) {
     }
   }
 
-  // RATE LIMITING - Check before processing request
-  const DAILY_LIMIT = 100;
-  const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
-  const today = new Date().toISOString().split('T')[0];
-  const rateLimitKey = `faq-proxy:${clientIP}:${today}`;
-  
-  try {
-    // Only proceed with rate limiting if KV namespace is available
-    if (env && env.FAQ_RATE_LIMITS) {
-      let usageData = await env.FAQ_RATE_LIMITS.get(rateLimitKey, { type: 'json' });
-      if (!usageData) {
-        usageData = { count: 0, date: today };
-      }
-      
-      // Check if rate limit exceeded
-      if (usageData.count >= DAILY_LIMIT) {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        tomorrow.setHours(0, 0, 0, 0);
-        
-        console.log(`Rate limit exceeded for IP ${clientIP}: ${usageData.count}/${DAILY_LIMIT}`);
-        
-        return new Response(JSON.stringify({
-          rateLimited: true,
-          error: `Daily extraction limit reached. You can extract up to ${DAILY_LIMIT} pages per day.`,
-          resetTime: tomorrow.getTime(),
-          limit: DAILY_LIMIT,
-          used: usageData.count,
-          resetIn: Math.ceil((tomorrow.getTime() - Date.now()) / 1000 / 60),
-          success: false,
-          metadata: {
-            warning: "Rate limit exceeded. Please try again tomorrow.",
-            terms: "By using this service, you agree not to violate any website's terms of service."
-          }
-        }), {
-          status: 429,
-          headers: { 
-            'Content-Type': 'application/json',
-            'X-RateLimit-Limit': DAILY_LIMIT.toString(),
-            'X-RateLimit-Remaining': '0',
-            'X-RateLimit-Reset': tomorrow.getTime().toString(),
-            ...cors 
-          },
-        });
-      }
-      
-      // Increment usage counter
-      usageData.count++;
-      
-      // Store updated usage after request completes
-      ctx.waitUntil(
-        env.FAQ_RATE_LIMITS.put(rateLimitKey, JSON.stringify(usageData), {
-          expirationTtl: 86400 // 24 hours
-        })
-      );
-      
-      // Add rate limit headers to response
-      const remaining = DAILY_LIMIT - usageData.count;
-      cors['X-RateLimit-Limit'] = DAILY_LIMIT.toString();
-      cors['X-RateLimit-Remaining'] = Math.max(0, remaining).toString();
+  // ENHANCED RATE LIMITING - Check before processing request
+  const clientIP = request.headers.get('CF-Connecting-IP') ||
+                   request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() ||
+                   request.headers.get('X-Real-IP') ||
+                   'unknown';
+
+  console.log(`Processing FAQ extraction request from IP: ${clientIP}`);
+
+  // Initialize enhanced rate limiter with worker-specific config for scraping protection
+  const rateLimiter = createRateLimiter(env, 'faq-proxy-fetch', {
+    limits: {
+      hourly: 25,    // 25 URL extractions per hour (prevent rapid scraping)
+      daily: 100,    // 100 URL extractions per day (maintain current limit)
+      weekly: 500,   // 500 URL extractions per week
+      monthly: 2000  // 2000 URL extractions per month
+    },
+    violations: {
+      soft_threshold: 2,    // Warning after 2 violations (stricter for scraping protection)
+      hard_threshold: 4,    // Block after 4 violations
+      ban_threshold: 8      // Permanent ban after 8 violations
     }
-  } catch (kvError) {
-    console.error('KV rate limit error:', kvError);
-    // Continue without rate limiting if KV fails
+  });
+
+  // Check rate limiting BEFORE processing request
+  const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, request, 'faq-proxy-fetch');
+  
+  console.log(`[Rate Limiting] Check completed in ${rateLimitResult.duration}s - Allowed: ${rateLimitResult.allowed}`);
+
+  if (!rateLimitResult.allowed) {
+    console.warn(`[Rate Limiting] Request blocked for IP ${clientIP} - Reason: ${rateLimitResult.reason}`);
+    
+    // Return appropriate error response based on reason
+    let statusCode = 429;
+    let errorMessage = 'Rate limit exceeded';
+    
+    switch (rateLimitResult.reason) {
+      case 'IP_BLACKLISTED':
+        statusCode = 403;
+        errorMessage = 'Access denied - IP address is blacklisted';
+        break;
+      case 'GEO_RESTRICTED':
+        statusCode = 403;
+        errorMessage = `Access denied - Geographic restrictions apply (${rateLimitResult.country})`;
+        break;
+      case 'TEMPORARILY_BLOCKED':
+        statusCode = 429;
+        errorMessage = `Temporarily blocked due to violations. Try again in ${Math.ceil(rateLimitResult.remaining_time / 60)} minutes`;
+        break;
+      case 'RATE_LIMIT_EXCEEDED':
+        statusCode = 429;
+        errorMessage = 'FAQ extraction rate limit exceeded. Please try again later';
+        break;
+    }
+
+    return new Response(JSON.stringify({
+      rateLimited: true,
+      error: errorMessage,
+      message: 'FAQ extraction requests are rate limited to prevent abuse and scraping',
+      success: false,
+      reason: rateLimitResult.reason,
+      usage: rateLimitResult.usage,
+      limits: rateLimitResult.limits,
+      reset_times: rateLimitResult.reset_times,
+      block_expires: rateLimitResult.block_expires,
+      remaining_time: rateLimitResult.remaining_time,
+      metadata: {
+        warning: "This service is for FAQ extraction only. Abuse will result in blocking.",
+        terms: "By using this service, you agree not to violate any website's terms of service."
+      }
+    }), {
+      status: statusCode,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-RateLimit-Limit': rateLimitResult.limits?.daily?.toString() || '100',
+        'X-RateLimit-Remaining': (rateLimitResult.limits?.daily - rateLimitResult.usage?.daily)?.toString() || '0',
+        'X-RateLimit-Reset': rateLimitResult.reset_times?.daily?.toString() || '',
+        ...cors
+      },
+    });
   }
+
+  console.log(`Processing FAQ extraction request. Usage: ${JSON.stringify(rateLimitResult.usage)}`);
+  
+  // Add rate limit headers to response for successful requests
+  cors['X-RateLimit-Limit'] = rateLimitResult.limits?.daily?.toString() || '100';
+  cors['X-RateLimit-Remaining'] = Math.max(0, (rateLimitResult.limits?.daily || 100) - (rateLimitResult.usage?.daily || 0)).toString();
+  cors['X-RateLimit-Reset'] = rateLimitResult.reset_times?.daily?.toString() || '';
 
   const url = new URL(request.url).searchParams.get('url');
   if (!url) {
@@ -366,13 +401,18 @@ async function handleRequest(request, env, ctx) {
     if (allFaqs.length > 0) {
       console.log(`Successfully extracted ${allFaqs.length} FAQs from ${url}`);
       console.log('First FAQ:', JSON.stringify(allFaqs[0], null, 2));
+      
+      // Record successful usage AFTER processing request
+      await rateLimiter.updateUsageCount(clientIP, 'faq-proxy-fetch');
+      console.log(`Enhanced rate limit updated after successful FAQ extraction`);
+      
       return new Response(JSON.stringify({
         success: true,
         source: url,
         faqs: allFaqs,
-        metadata: { 
-          extractionMethod: 'enhanced-html-parser', 
-          totalExtracted: allFaqs.length, 
+        metadata: {
+          extractionMethod: 'enhanced-html-parser',
+          totalExtracted: allFaqs.length,
           title: title,
           processing: processing,
           warnings: warnings,
@@ -381,9 +421,17 @@ async function handleRequest(request, env, ctx) {
           imageCount: processing.imagesProcessed,
           brokenImages: processing.brokenImages,
           terms: "By using this service, you agree not to violate any website's terms of service."
+        },
+        rate_limiting: {
+          usage: rateLimitResult.usage,
+          limits: rateLimitResult.limits,
+          reset_times: rateLimitResult.reset_times,
+          worker: 'faq-proxy-fetch',
+          enhanced: true,
+          check_duration: rateLimitResult.duration
         }
-      }), { 
-        headers: { 'Content-Type': 'application/json', ...cors } 
+      }), {
+        headers: { 'Content-Type': 'application/json', ...cors }
       });
     }
     

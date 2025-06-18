@@ -1,6 +1,6 @@
 /**
  * Premium Quality URL-to-FAQ Generator
- * 
+ *
  * Deep Analysis Mode (15K content + 2-3 minute processing):
  * - Extensive content analysis (up to 15K characters)
  * - Multiple AI optimization passes for quality
@@ -11,6 +11,7 @@
  */
 
 import { parse } from 'node-html-parser';
+import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
 
 // Premium AI call with extended timeouts for deep analysis (up to 3 minutes)
 async function callAIWithTimeout(aiBinding, model, messages, options = {}, timeoutMs = 120000) {
@@ -118,20 +119,48 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
 
+    // Initialize enhanced rate limiter with dynamic configuration for AI-intensive operations
+    const rateLimiter = await createRateLimiter(env, 'url-to-faq-generator-worker', {
+      // Fallback configuration if dynamic config fails
+      hourlyLimit: 5,     // Very strict - intensive 3-minute AI operations
+      dailyLimit: 15,     // Conservative daily allowance
+      weeklyLimit: 75,    // Weekly budget for URL-to-FAQ generation
+      monthlyLimit: 300,  // Monthly limit for premium service
+      violationThresholds: {
+        soft: 2,          // Quick soft limit due to expensive operations
+        hard: 4,          // Hard limit before temp blocks
+        ban: 8            // Permanent ban threshold
+      }
+    });
+
     // Health check endpoint
     if (request.method === 'GET') {
       const url = new URL(request.url);
       if (url.pathname === '/health') {
+        const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
+        const usageData = await rateLimiter.getCurrentUsage(env, clientIP);
+        
         return new Response(JSON.stringify({
           status: 'healthy',
           service: 'url-to-faq-generator-worker',
           timestamp: new Date().toISOString(),
-          version: '4.0.0-enhanced',
+          version: '4.0.0-enhanced-rate-limited',
           model: '@cf/meta/llama-4-scout-17b-16e-instruct',
-          features: ['url_analysis', 'deep_content_extraction', 'premium_faq_generation', 'multi_pass_optimization'],
+          features: ['url_analysis', 'deep_content_extraction', 'premium_faq_generation', 'multi_pass_optimization', 'enhanced_rate_limiting'],
           rate_limits: {
-            hourly_limit: 10,
-            per_request_timeout: '150s'
+            hourly_limit: 5,
+            daily_limit: 15,
+            weekly_limit: 75,
+            monthly_limit: 300,
+            per_request_timeout: '180s',
+            current_usage: usageData
+          },
+          enhanced_features: {
+            ip_management: true,
+            progressive_penalties: true,
+            violation_tracking: true,
+            geographic_restrictions: true,
+            analytics_tracking: true
           }
         }), {
           status: 200,
@@ -162,7 +191,7 @@ export default {
         return new Response(JSON.stringify({
           error: 'Missing URL parameter',
           success: false
-        }), { 
+        }), {
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
@@ -178,32 +207,32 @@ export default {
         return new Response(JSON.stringify({
           error: 'Invalid URL format',
           success: false
-        }), { 
+        }), {
           status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
 
-      // Rate limiting (kept the same)
+      // Enhanced rate limiting check
       const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
-      const currentHour = Math.floor(Date.now() / (60 * 60 * 1000));
-      const rateLimitKey = `url_faq:${clientIP}:${currentHour}`;
+      const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, request, 'url-to-faq-generator-worker');
       
-      let usageData = await env.FAQ_RATE_LIMITS.get(rateLimitKey, { type: 'json' });
-      if (!usageData) {
-        usageData = { count: 0, hour: currentHour };
-      }
-
-      if (usageData.count >= 10) {
-        const nextHour = new Date((currentHour + 1) * 60 * 60 * 1000);
+      if (!rateLimitResult.allowed) {
         return new Response(JSON.stringify({
           rateLimited: true,
-          error: 'Hourly limit reached (10 per hour)',
-          resetTime: nextHour.toISOString(),
-          success: false
+          error: rateLimitResult.reason,
+          retryAfter: rateLimitResult.retryAfter,
+          resetTime: rateLimitResult.resetTime,
+          success: false,
+          violation_type: rateLimitResult.violationType,
+          block_duration: rateLimitResult.blockDuration
         }), {
-          status: 429,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          status: rateLimitResult.violationType === 'IP_BLACKLISTED' ? 403 : 429,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+            'Retry-After': rateLimitResult.retryAfter?.toString() || '3600'
+          }
         });
       }
 
@@ -503,14 +532,14 @@ Return the quality-enhanced FAQs in the same JSON format.`;
         throw new Error(`Only ${validFAQs.length} high-quality FAQs generated (needed ${Math.floor(faqCount * 0.7)})`);
       }
 
-      // Update rate limit
-      usageData.count++;
-      await env.FAQ_RATE_LIMITS.put(rateLimitKey, JSON.stringify(usageData), {
-        expirationTtl: 86400
-      });
+      // Record successful usage with enhanced rate limiting
+      await rateLimiter.updateUsageCount(clientIP, 'url-to-faq-generator-worker');
 
       const processingTime = Date.now() - startTime;
       const wasEnhanced = processingTime < 120000; // 2 minute enhancement window
+      
+      // Get current usage data for response metadata
+      const currentUsage = await rateLimiter.getCurrentUsage(clientIP, 'url-to-faq-generator-worker', new Date());
 
       return new Response(JSON.stringify({
         success: true,
@@ -520,15 +549,21 @@ Return the quality-enhanced FAQs in the same JSON format.`;
           title: title,
           totalGenerated: validFAQs.length,
           processingTime: processingTime,
-          model: 'llama-4-scout-17b-16e',
+          model: 'llama-4-scout-17b-16e-enhanced',
           enhanced: wasEnhanced,
           qualityMode: 'premium-deep-analysis', // Premium indicator
           contentAnalyzed: '15K characters',
           optimizationPasses: wasEnhanced ? 'multi-pass' : 'single-pass',
-          usage: {
-            used: usageData.count,
-            remaining: 10 - usageData.count,
-            resetTime: new Date().setHours(new Date().getHours() + 1)
+          rate_limiting: {
+            service: 'url-to-faq-generator-worker',
+            limits: {
+              hourly: 5,
+              daily: 15,
+              weekly: 75,
+              monthly: 300
+            },
+            current_usage: currentUsage,
+            features: ['ip_management', 'progressive_penalties', 'violation_tracking']
           }
         }
       }), {

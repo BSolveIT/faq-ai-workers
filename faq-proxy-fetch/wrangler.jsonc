@@ -14,6 +14,22 @@
       "binding": "FAQ_RATE_LIMITS",
       "id": "77fcd59503e34efcaf4d77d1a550433b",
       "preview_id": "77fcd59503e34efcaf4d77d1a550433b"
+    },
+    {
+      "binding": "FAQ_IP_WHITELIST",
+      "id": "98e217d3ffdf439f9080f29b9868dce0"
+    },
+    {
+      "binding": "FAQ_IP_BLACKLIST",
+      "id": "ea349175a0dd4a01923c9da59e794b9b"
+    },
+    {
+      "binding": "FAQ_VIOLATIONS",
+      "id": "99d05632fa564f95bd47f22891f943aa"
+    },
+    {
+      "binding": "FAQ_ANALYTICS",
+      "id": "a3573648cc1d4c1990a06090dab3e646"
     }
   ]
 }

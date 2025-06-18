@@ -1,10 +1,11 @@
 // Cloudflare Worker: faq-enhancement-worker
-// UPDATED: Llama 3.1 8B model, 50/day limit, 2 answer types (Optimised & Detailed)
+// UPDATED: Llama 3.1 8B model, Enhanced IP-based rate limiting, 2 answer types (Optimised & Detailed)
 // All original functionality preserved
 // SYNTAX ERROR FIXED: Removed duplicate code sections
 
 const { htmlToText } = require('html-to-text');
 const { parse: parseHTML } = require('node-html-parser');
+import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
 
 // Session-based context caching to reduce duplicate fetching
 const sessionContextCache = new Map();
@@ -38,13 +39,22 @@ export default {
           status: 'healthy',
           service: 'faq-enhancement-worker',
           timestamp: new Date().toISOString(),
-          version: '3.0.0-speed-optimized',
+          version: '3.0.0-enhanced-rate-limiting',
           model: '@cf/meta/llama-3.1-8b-instruct',
-          features: ['question_enhancement', 'answer_optimization', 'seo_analysis', 'quality_scoring'],
+          features: ['question_enhancement', 'answer_optimization', 'seo_analysis', 'quality_scoring', 'enhanced_rate_limiting', 'ip_management'],
           rate_limits: {
-            daily_limit: 50,
-            per_request_timeout: '15s'
-          }
+            hourly: 15,
+            daily: 50,
+            weekly: 250,
+            monthly: 1000
+          },
+          capabilities: [
+            'multi_tier_rate_limiting',
+            'ip_whitelist_blacklist',
+            'violation_tracking',
+            'progressive_penalties',
+            'geographic_restrictions'
+          ]
         }), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -76,39 +86,77 @@ export default {
         });
       }
 
-      // Rate limiting using KV store - UPDATED TO 50/DAY
-      const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
-      const today = new Date().toISOString().split('T')[0];
-      const rateLimitKey = `enhance:${clientIP}:${today}`;
-      
-      // Get current usage count
-      let usageData = await env.FAQ_RATE_LIMITS.get(rateLimitKey, { type: 'json' });
-      if (!usageData) {
-        usageData = { count: 0, date: today };
-      }
+      // Get client IP with proper extraction
+      const clientIP = request.headers.get('CF-Connecting-IP') ||
+                      request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() ||
+                      request.headers.get('X-Real-IP') ||
+                      'unknown';
 
-      // Check rate limit - UPDATED TO 50
-      if (usageData.count >= 50) {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        tomorrow.setHours(0, 0, 0, 0);
+      console.log(`Processing enhancement request from IP: ${clientIP}`);
+
+      // Initialize enhanced rate limiter with worker-specific config
+      const rateLimiter = createRateLimiter(env, 'faq-enhancement', {
+        limits: {
+          hourly: 15,    // 15 enhancement requests per hour (AI-intensive)
+          daily: 50,     // 50 enhancement requests per day
+          weekly: 250,   // 250 enhancement requests per week
+          monthly: 1000  // 1000 enhancement requests per month
+        },
+        violations: {
+          soft_threshold: 3,    // Warning after 3 violations
+          hard_threshold: 5,    // Block after 5 violations
+          ban_threshold: 10     // Permanent ban after 10 violations
+        }
+      });
+
+      // Check rate limiting BEFORE processing request
+      const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, request, 'faq-enhancement');
+      
+      console.log(`[Rate Limiting] Check completed in ${rateLimitResult.duration}s - Allowed: ${rateLimitResult.allowed}`);
+
+      if (!rateLimitResult.allowed) {
+        console.warn(`[Rate Limiting] Request blocked for IP ${clientIP} - Reason: ${rateLimitResult.reason}`);
         
+        // Return appropriate error response based on reason
+        let statusCode = 429;
+        let errorMessage = 'Rate limit exceeded';
+        
+        switch (rateLimitResult.reason) {
+          case 'IP_BLACKLISTED':
+            statusCode = 403;
+            errorMessage = 'Access denied - IP address is blacklisted';
+            break;
+          case 'GEO_RESTRICTED':
+            statusCode = 403;
+            errorMessage = `Access denied - Geographic restrictions apply (${rateLimitResult.country})`;
+            break;
+          case 'TEMPORARILY_BLOCKED':
+            statusCode = 429;
+            errorMessage = `Temporarily blocked due to violations. Try again in ${Math.ceil(rateLimitResult.remaining_time / 60)} minutes`;
+            break;
+          case 'RATE_LIMIT_EXCEEDED':
+            statusCode = 429;
+            errorMessage = 'Enhancement rate limit exceeded. Please try again later';
+            break;
+        }
+
         return new Response(JSON.stringify({
-          error: 'Daily enhancement limit reached',
-          message: 'You can enhance up to 50 FAQs per day.',
-          usage: {
-            used: usageData.count,
-            remaining: 0,
-            limit: 50,
-            resetTime: tomorrow.getTime()
-          }
+          error: errorMessage,
+          message: 'FAQ enhancement requests are rate limited to prevent abuse',
+          rateLimited: true,
+          reason: rateLimitResult.reason,
+          usage: rateLimitResult.usage,
+          limits: rateLimitResult.limits,
+          reset_times: rateLimitResult.reset_times,
+          block_expires: rateLimitResult.block_expires,
+          remaining_time: rateLimitResult.remaining_time
         }), {
-          status: 429,
+          status: statusCode,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
 
-      console.log('Processing enhancement request. Usage:', usageData.count + 1, '/50');
+      console.log(`Processing enhancement request. Usage: ${JSON.stringify(rateLimitResult.usage)}`);
 
       // Clean input for AI processing
       const sanitizedQuestion = sanitizeContent(question);
@@ -190,11 +238,8 @@ RETURN ONLY THIS JSON STRUCTURE (no additional text):
 
 IMPORTANT: Return ONLY the JSON object above. No other text.`;
 
-      // Update rate limit counter first
-      usageData.count++;
-      await env.FAQ_RATE_LIMITS.put(rateLimitKey, JSON.stringify(usageData), {
-        expirationTtl: 86400 // 24 hours
-      });
+      // Record usage in enhanced rate limiting system (before processing)
+      // This will be recorded again after successful completion
 
       // AI call with retry logic and timeout protection
       const MAX_WAIT_TIME = 15000; // 15 seconds max per attempt
@@ -284,25 +329,32 @@ IMPORTANT: Return ONLY the JSON object above. No other text.`;
           }
 
           console.log(`Enhancement complete. Generated ${enhancements.question_variations.length} question variations.`);
+          
+          // Record successful usage AFTER processing request
+          await rateLimiter.updateUsageCount(clientIP, 'faq-enhancement');
+          console.log(`Enhanced rate limit updated after successful completion`);
+          
           console.log(`========== Request completed successfully in ${Date.now() - startTime}ms ==========`);
 
           // Return successful response
           return new Response(JSON.stringify({
             success: true,
             enhancements: enhancements,
-            usage: {
-              used: usageData.count,
-              remaining: 50 - usageData.count,
-              limit: 50,
-              resetTime: new Date().setHours(24, 0, 0, 0)
-            },
+            usage: rateLimitResult.usage,
+            limits: rateLimitResult.limits,
+            reset_times: rateLimitResult.reset_times,
             model_info: {
               model: '@cf/meta/llama-3.1-8b-instruct',
-              version: env.WORKER_VERSION || '3.0.0-speed-optimized',
+              version: env.WORKER_VERSION || '3.0.0-enhanced-rate-limiting',
               processingTime: Date.now() - startTime,
               page_context_extracted: pageContext.length > 0,
               cache_status: sessionContextCache.has(`${sessionId || 'no-session'}:${pageUrl}`) ? 'hit' : 'miss',
-              attempts_used: attempt
+              attempts_used: attempt,
+              rate_limiting: {
+                worker: 'faq-enhancement',
+                enhanced: true,
+                check_duration: rateLimitResult.duration
+              }
             }
           }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -333,11 +385,8 @@ IMPORTANT: Return ONLY the JSON object above. No other text.`;
       console.log('Returning fallback response with rule-based enhancements');
       console.log(`========== Request completed with fallback in ${Date.now() - startTime}ms ==========`);
       
-      // Decrement counter on complete failure
-      usageData.count--;
-      await env.FAQ_RATE_LIMITS.put(rateLimitKey, JSON.stringify(usageData), {
-        expirationTtl: 86400
-      });
+      // Note: We don't decrement rate limits on AI failures since the user still consumed the attempt
+      // The enhanced rate limiting system will handle this appropriately
       
       // Return graceful fallback response
       return new Response(JSON.stringify({
@@ -345,15 +394,18 @@ IMPORTANT: Return ONLY the JSON object above. No other text.`;
         enhancements: createComprehensiveFallbackEnhancements(sanitizedQuestion, sanitizedAnswer, pageContext),
         fallback: true,
         message: "AI service is experiencing issues - using instant rule-based enhancements",
-        usage: {
-          used: usageData.count,
-          remaining: 50 - usageData.count,
-          limit: 50
-        },
+        usage: rateLimitResult.usage,
+        limits: rateLimitResult.limits,
+        reset_times: rateLimitResult.reset_times,
         debug_info: {
           error: lastError?.message,
           attempts: MAX_RETRIES,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          rate_limiting: {
+            worker: 'faq-enhancement',
+            enhanced: true,
+            check_duration: rateLimitResult.duration
+          }
         }
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }

@@ -1,25 +1,28 @@
 /**
  * FAQ Realtime Assistant Worker - Enhanced Contextual Redesign (FIXED VERSION)
- * 
+ *
  * TRANSFORMATION: Complex panel responses → Simple contextual suggestions with JIT learning
- * 
+ *
  * Features:
  * - Educational benefits/explanations for each suggestion (JIT Learning)
  * - Smart website context integration
  * - SEO scoring and keyword optimization
  * - Question type detection and specialized suggestions
  * - Smart caching for performance
- * - High rate limits for contextual usage
+ * - Enhanced IP-based rate limiting with violation tracking and progressive penalties
  * - Enhanced error handling and fallbacks
  * - Grammar checking and improvement
- * 
+ *
  * FIXES APPLIED:
  * ✅ Increased token limits (200-250) for complete responses
  * ✅ Robust JSON parsing with multiple fallback methods
  * ✅ Better cache key generation
  * ✅ Regex extraction fallback system
  * ✅ Enhanced error handling and logging
+ * ✅ Enhanced IP-based rate limiting integration
  */
+
+import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
 
 /**
  * Improve grammar and formatting of text suggestions
@@ -242,16 +245,20 @@ export default {
           endpoints: ['/'],
           capabilities: [
             'contextual_question_suggestions',
-            'typing_assistance', 
+            'typing_assistance',
             'question_improvement',
             'validation_tips',
             'duplicate_detection',
             'grammar_checking',
-            'seo_optimization'
+            'seo_optimization',
+            'enhanced_rate_limiting',
+            'ip_management'
           ],
-          rate_limit: {
-            requests_per_day: 1000,
-            current_usage: 0
+          rate_limits: {
+            hourly: 30,
+            daily: 200,
+            weekly: 1000,
+            monthly: 4000
           },
           performance: {
             avg_response_time: '2.8s',
@@ -328,23 +335,60 @@ export default {
       const primaryQuestion = questions[0];
       console.log(`[Main Handler] Primary question: "${primaryQuestion.substring(0, 75)}..." (${primaryQuestion.length} chars)`);
 
-      // Rate limiting check (high limits for contextual usage)
-      const rateLimitStartTime = Date.now();
-      const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
-      const rateLimitResult = await checkRateLimit(clientIP, env);
-      const rateLimitDuration = ((Date.now() - rateLimitStartTime) / 1000).toFixed(2);
+      // Get client IP
+      const clientIP = request.headers.get('CF-Connecting-IP') ||
+                      request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() ||
+                      request.headers.get('X-Real-IP') ||
+                      'unknown';
+
+      console.log(`[Main Handler] Processing request from IP: ${clientIP}`);
+
+      // Initialize dynamic rate limiter
+      const rateLimiter = await createRateLimiter(env, 'faq-realtime-assistant-worker');
+
+      // Check rate limiting BEFORE processing request
+      const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, env);
       
-      console.log(`[Main Handler] Rate limit check completed in ${rateLimitDuration}s - Used: ${rateLimitResult.current}/1000`);
-      
-      if (rateLimitResult.blocked) {
-        console.warn(`[Main Handler] Rate limit exceeded for IP ${clientIP} - ${rateLimitResult.current}/1000 requests`);
+      console.log(`[Rate Limiting] Check completed in ${rateLimitResult.duration}s - Allowed: ${rateLimitResult.allowed}`);
+
+      if (!rateLimitResult.allowed) {
+        console.warn(`[Rate Limiting] Request blocked for IP ${clientIP} - Reason: ${rateLimitResult.reason}`);
+        
+        // Return appropriate error response based on reason
+        let statusCode = 429;
+        let errorMessage = 'Rate limit exceeded';
+        
+        switch (rateLimitResult.reason) {
+          case 'IP_BLACKLISTED':
+            statusCode = 403;
+            errorMessage = 'Access denied - IP address is blacklisted';
+            break;
+          case 'GEO_RESTRICTED':
+            statusCode = 403;
+            errorMessage = `Access denied - Geographic restrictions apply (${rateLimitResult.country})`;
+            break;
+          case 'TEMPORARILY_BLOCKED':
+            statusCode = 429;
+            errorMessage = `Temporarily blocked due to violations. Try again in ${Math.ceil(rateLimitResult.remaining_time / 60)} minutes`;
+            break;
+          case 'RATE_LIMIT_EXCEEDED':
+            statusCode = 429;
+            errorMessage = 'Rate limit exceeded. Please try again later';
+            break;
+        }
+
         return new Response(JSON.stringify({
-          error: 'Daily limit reached. Please try again tomorrow.',
+          error: errorMessage,
           rateLimited: true,
-          contextual: true,
-          resetTime: rateLimitResult.resetTime
+          reason: rateLimitResult.reason,
+          usage: rateLimitResult.usage,
+          limits: rateLimitResult.limits,
+          reset_times: rateLimitResult.reset_times,
+          block_expires: rateLimitResult.block_expires,
+          remaining_time: rateLimitResult.remaining_time,
+          contextual: true
         }), {
-          status: 429,
+          status: statusCode,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
@@ -420,11 +464,11 @@ export default {
       const generationDuration = ((Date.now() - generationStartTime) / 1000).toFixed(2);
       console.log(`[Main Handler] ${mode} generation completed in ${generationDuration}s - ${suggestions.length} suggestions generated`);
 
-      // Update rate limit counter
+      // Record successful usage AFTER processing request
       const rateLimitUpdateStart = Date.now();
-      await updateRateLimit(clientIP, env);
+      await rateLimiter.updateUsageCount(clientIP, env);
       const rateLimitUpdateDuration = ((Date.now() - rateLimitUpdateStart) / 1000).toFixed(2);
-      console.log(`[Main Handler] Rate limit updated in ${rateLimitUpdateDuration}s`);
+      console.log(`[Main Handler] Enhanced rate limit updated in ${rateLimitUpdateDuration}s`);
 
       // Build enhanced response with educational value
       const response = {
@@ -449,16 +493,17 @@ export default {
           cached: false,
           timestamp: new Date().toISOString(),
           rate_limit: {
-            used: rateLimitResult.current + 1,
-            limit: 1000,
-            remaining: 999 - rateLimitResult.current
+            usage: rateLimitResult.usage,
+            limits: rateLimitResult.limits,
+            reset_times: rateLimitResult.reset_times,
+            worker: 'faq-realtime-assistant'
           },
           performance: {
             total_duration: ((Date.now() - requestStartTime) / 1000).toFixed(2),
             cache_check: cacheCheckDuration,
             analysis: analysisDuration,
             generation: generationDuration,
-            rate_limit: rateLimitDuration
+            rate_limit: rateLimitResult.duration
           }
         }
       };
@@ -1284,59 +1329,4 @@ async function cacheResponse(cacheKey, response, env) {
   }
 }
 
-/**
- * Enhanced rate limiting with high limits for contextual usage
- */
-async function checkRateLimit(clientIP, env) {
-  const startTime = Date.now();
-  const key = `contextual_rate_${clientIP}_${new Date().toISOString().split('T')[0]}`;
-  
-  try {
-    const current = await env.FAQ_RATE_LIMITS?.get(key);
-    const count = current ? parseInt(current) : 0;
-    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    
-    // High limit: 1000 requests per day for contextual suggestions
-    const isBlocked = count >= 1000;
-    
-    let resetTime = null;
-    if (isBlocked) {
-      const tomorrow = new Date();
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      tomorrow.setHours(0, 0, 0, 0);
-      resetTime = tomorrow.toISOString();
-    }
-    
-    console.log(`[Rate Limit] Check completed in ${duration}s - IP: ${clientIP}, Usage: ${count}/1000, Blocked: ${isBlocked}`);
-    
-    return { blocked: isBlocked, current: count, resetTime };
-  } catch (error) {
-    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.error(`[Rate Limit] Check error in ${duration}s:`, error);
-    return { blocked: false, current: 0, resetTime: null };
-  }
-}
-
-async function updateRateLimit(clientIP, env) {
-  const startTime = Date.now();
-  const key = `contextual_rate_${clientIP}_${new Date().toISOString().split('T')[0]}`;
-  
-  try {
-    const current = await env.FAQ_RATE_LIMITS?.get(key);
-    const count = current ? parseInt(current) + 1 : 1;
-    
-    // Set expiry to end of day
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    tomorrow.setHours(0, 0, 0, 0);
-    const ttl = Math.floor((tomorrow.getTime() - Date.now()) / 1000);
-    
-    await env.FAQ_RATE_LIMITS?.put(key, count.toString(), { expirationTtl: ttl });
-    
-    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(`[Rate Limit] Updated in ${duration}s - IP: ${clientIP}, New count: ${count}/1000`);
-  } catch (error) {
-    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.error(`[Rate Limit] Update error in ${duration}s:`, error);
-  }
-}
+// Old rate limiting functions removed - now using enhanced rate limiting system

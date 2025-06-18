@@ -1,5 +1,7 @@
-// SEO Analyzer Worker - AI-Powered with Expert-Level Analysis
+// SEO Analyzer Worker - AI-Powered with Expert-Level Analysis and Enhanced Rate Limiting
 // Uses Llama 4 Scout 17B 16E Instruct for superior SEO comprehension and Position Zero analysis
+
+import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -23,12 +25,23 @@ export default {
           status: 'healthy',
           service: 'faq-seo-analyzer-worker',
           timestamp: new Date().toISOString(),
-          version: '1.0.0',
+          version: '1.0.0-enhanced-rate-limiting',
           model: '@cf/meta/llama-4-scout-17b-16e-instruct',
-          features: ['seo_analysis', 'readability_scoring', 'voice_search_optimization', 'featured_snippet_analysis'],
+          features: ['seo_analysis', 'readability_scoring', 'voice_search_optimization', 'featured_snippet_analysis', 'enhanced_rate_limiting', 'ip_management'],
           rate_limits: {
+            hourly: 10,
+            daily: 30,
+            weekly: 150,
+            monthly: 600,
             per_request_timeout: '30s'
-          }
+          },
+          capabilities: [
+            'multi_tier_rate_limiting',
+            'ip_whitelist_blacklist',
+            'violation_tracking',
+            'progressive_penalties',
+            'geographic_restrictions'
+          ]
         }), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -66,6 +79,81 @@ export default {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
       }
+
+      // Get client IP with proper extraction
+      const clientIP = request.headers.get('CF-Connecting-IP') ||
+                      request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() ||
+                      request.headers.get('X-Real-IP') ||
+                      'unknown';
+
+      console.log(`Processing SEO analysis request from IP: ${clientIP}`);
+
+      // Initialize enhanced rate limiter with worker-specific config
+      const rateLimiter = createRateLimiter(env, 'faq-seo-analyzer', {
+        limits: {
+          hourly: 10,    // 10 SEO analysis requests per hour (very AI-intensive)
+          daily: 30,     // 30 SEO analysis requests per day
+          weekly: 150,   // 150 SEO analysis requests per week
+          monthly: 600   // 600 SEO analysis requests per month
+        },
+        violations: {
+          soft_threshold: 3,    // Warning after 3 violations
+          hard_threshold: 5,    // Block after 5 violations
+          ban_threshold: 10     // Permanent ban after 10 violations
+        }
+      });
+
+      // Check rate limiting BEFORE processing request
+      const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, request, 'faq-seo-analyzer');
+      
+      console.log(`[Rate Limiting] Check completed in ${rateLimitResult.duration}s - Allowed: ${rateLimitResult.allowed}`);
+
+      if (!rateLimitResult.allowed) {
+        console.warn(`[Rate Limiting] Request blocked for IP ${clientIP} - Reason: ${rateLimitResult.reason}`);
+        
+        // Return appropriate error response based on reason
+        let statusCode = 429;
+        let errorMessage = 'Rate limit exceeded';
+        
+        switch (rateLimitResult.reason) {
+          case 'IP_BLACKLISTED':
+            statusCode = 403;
+            errorMessage = 'Access denied - IP address is blacklisted';
+            break;
+          case 'GEO_RESTRICTED':
+            statusCode = 403;
+            errorMessage = `Access denied - Geographic restrictions apply (${rateLimitResult.country})`;
+            break;
+          case 'TEMPORARILY_BLOCKED':
+            statusCode = 429;
+            errorMessage = `Temporarily blocked due to violations. Try again in ${Math.ceil(rateLimitResult.remaining_time / 60)} minutes`;
+            break;
+          case 'RATE_LIMIT_EXCEEDED':
+            statusCode = 429;
+            errorMessage = 'SEO analysis rate limit exceeded. Please try again later';
+            break;
+        }
+
+        return new Response(JSON.stringify({
+          error: errorMessage,
+          message: 'SEO analysis requests are rate limited to prevent abuse',
+          seoScore: 0,
+          readabilityScore: 0,
+          voiceSearchScore: 0,
+          rateLimited: true,
+          reason: rateLimitResult.reason,
+          usage: rateLimitResult.usage,
+          limits: rateLimitResult.limits,
+          reset_times: rateLimitResult.reset_times,
+          block_expires: rateLimitResult.block_expires,
+          remaining_time: rateLimitResult.remaining_time
+        }), {
+          status: statusCode,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+
+      console.log(`Processing SEO analysis request. Usage: ${JSON.stringify(rateLimitResult.usage)}`);
 
       // Expert-level AI prompt with detailed instructions
       const analysisPrompt = `You are a senior Google Search Quality Rater and SEO expert with 15 years of experience. You understand exactly how Google ranks content for Featured Snippets (Position Zero), People Also Ask boxes, and voice search results.
@@ -247,6 +335,10 @@ Analyze FAQs as if determining their Google ranking potential. Your advanced 17B
         ? aiAnalysis.suggestions.filter(s => s && typeof s === 'string').slice(0, 5)
         : generateDefaultSuggestions(seoScore, readabilityScore, voiceSearchScore);
 
+      // Record successful usage AFTER processing request
+      await rateLimiter.updateUsageCount(clientIP, 'faq-seo-analyzer');
+      console.log(`Enhanced rate limit updated after successful SEO analysis`);
+
       // Build response
       const response = {
         success: true,
@@ -265,6 +357,14 @@ Analyze FAQs as if determining their Google ranking potential. Your advanced 17B
           model: 'llama-4-scout-17b-16e-instruct',
           neurons: 4,
           reasoning: aiAnalysis.reasoning || null
+        },
+        rate_limiting: {
+          usage: rateLimitResult.usage,
+          limits: rateLimitResult.limits,
+          reset_times: rateLimitResult.reset_times,
+          worker: 'faq-seo-analyzer',
+          enhanced: true,
+          check_duration: rateLimitResult.duration
         }
       };
 
