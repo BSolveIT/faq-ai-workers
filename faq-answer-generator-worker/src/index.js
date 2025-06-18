@@ -239,7 +239,29 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
 
-    // Only accept POST requests
+    // Health check endpoint
+    if (request.method === 'GET') {
+      const url = new URL(request.url);
+      if (url.pathname === '/health') {
+        return new Response(JSON.stringify({
+          status: 'healthy',
+          service: 'faq-answer-generator-worker',
+          timestamp: new Date().toISOString(),
+          version: '1.0.0',
+          model: '@cf/meta/llama-3.1-8b-instruct',
+          features: ['answer_generation', 'answer_improvement', 'answer_validation', 'answer_expansion', 'answer_examples', 'tone_adjustment'],
+          rate_limits: {
+            daily_limit: 1000,
+            per_request_timeout: '30s'
+          }
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // Only accept POST requests for main functionality
     if (request.method !== 'POST') {
       return new Response(JSON.stringify({
         error: 'Method not allowed'

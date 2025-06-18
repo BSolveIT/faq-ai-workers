@@ -31,6 +31,26 @@ async function handleRequest(request, env, ctx) {
     return new Response(null, { headers: cors });
   }
 
+  // Health check endpoint
+  if (request.method === 'GET') {
+    const url = new URL(request.url);
+    if (url.pathname === '/health') {
+      return new Response(JSON.stringify({
+        status: 'healthy',
+        service: 'faq-proxy-fetch',
+        timestamp: new Date().toISOString(),
+        version: '1.0.0',
+        features: ['faq_extraction', 'schema_parsing', 'json_ld', 'microdata', 'rdfa'],
+        rate_limits: {
+          daily_limit: 100,
+          per_request_timeout: '10s'
+        }
+      }), {
+        status: 200,
+        headers: { ...cors, 'Content-Type': 'application/json' }
+      });
+    }
+  }
 
   // Security: Origin/Referer checking
   const allowedOrigins = [

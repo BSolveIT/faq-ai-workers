@@ -15,7 +15,28 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
 
-    // Only accept POST
+    // Health check endpoint
+    if (request.method === 'GET') {
+      const url = new URL(request.url);
+      if (url.pathname === '/health') {
+        return new Response(JSON.stringify({
+          status: 'healthy',
+          service: 'faq-seo-analyzer-worker',
+          timestamp: new Date().toISOString(),
+          version: '1.0.0',
+          model: '@cf/meta/llama-4-scout-17b-16e-instruct',
+          features: ['seo_analysis', 'readability_scoring', 'voice_search_optimization', 'featured_snippet_analysis'],
+          rate_limits: {
+            per_request_timeout: '30s'
+          }
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    // Only accept POST for main functionality
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { 
         status: 405,

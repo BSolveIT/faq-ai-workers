@@ -118,6 +118,28 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
 
+    // Health check endpoint
+    if (request.method === 'GET') {
+      const url = new URL(request.url);
+      if (url.pathname === '/health') {
+        return new Response(JSON.stringify({
+          status: 'healthy',
+          service: 'url-to-faq-generator-worker',
+          timestamp: new Date().toISOString(),
+          version: '4.0.0-enhanced',
+          model: '@cf/meta/llama-4-scout-17b-16e-instruct',
+          features: ['url_analysis', 'deep_content_extraction', 'premium_faq_generation', 'multi_pass_optimization'],
+          rate_limits: {
+            hourly_limit: 10,
+            per_request_timeout: '150s'
+          }
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
     if (request.method !== 'POST') {
       return new Response(JSON.stringify({
         error: 'Method not allowed. Use POST with URL parameter.'
