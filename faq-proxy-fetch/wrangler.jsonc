@@ -5,7 +5,8 @@
   "compatibility_date": "2025-06-10",
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
-    "enabled": true
+    "enabled": true,
+    "head_sampling_rate": 0.01
   },
   
   // KV namespace for rate limiting (same as legacy worker)
