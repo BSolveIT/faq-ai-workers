@@ -1,0 +1,298 @@
+[
+  {
+    "WorkerName": "FAQ Answer Generator",
+    "Endpoint": "https://faq-answer-generator-worker.winter-cake-bf57.workers.dev/health",
+    "StatusCode": null,
+    "StatusDescription": null,
+    "ResponseTime": null,
+    "ContentLength": 0,
+    "ResponseBody": null,
+    "Headers": null,
+    "Success": false,
+    "ErrorMessage": "Response status code does not indicate success: 503 (Service Unavailable)."
+  },
+  {
+    "WorkerName": "FAQ Enhancement",
+    "Endpoint": "https://faq-enhancement-worker.winter-cake-bf57.workers.dev/health",
+    "StatusCode": 200,
+    "StatusDescription": "OK",
+    "ResponseTime": 4363.84,
+    "ContentLength": 1379,
+    "ResponseBody": "{\"status\":\"degraded\",\"service\":\"faq-enhancement-worker\",\"timestamp\":\"2025-06-20T14:26:10.863Z\",\"server_time\":1750429570863,\"version\":\"3.0.0-enhanced-rate-limiting\",\"model\":{\"name\":\"@cf/meta/llama-3.1-8b-instruct\",\"max_tokens\":1500,\"temperature\":0.7,\"timeout\":30000,\"retries\":3},\"configuration\":{\"source\":\"default\",\"last_updated\":\"2025-06-20T14:26:06.817Z\",\"cache_status\":\"cached\",\"config_version\":1,\"fallback_used\":false},\"performance\":{\"avg_response_time_ms\":0,\"uptime_percentage\":95,\"cache_hit_rate_percentage\":0,\"error_rate_percentage\":0,\"last_successful_operation\":null,\"total_requests_served\":0},\"operational_status\":{\"health\":\"degraded\",\"ai_binding_available\":true,\"kv_stores_available\":{\"available_stores\":2,\"total_stores\":3,\"percentage\":67},\"cache_operational\":false,\"config_loaded\":true,\"last_health_check\":\"2025-06-20T14:26:10.863Z\"},\"capabilities\":[\"ai_processing_llama_3.1_8b_instruct\",\"faq_rate_limits_storage\",\"faq_ip_whitelist_storage\",\"faq_ip_blacklist_storage\",\"faq_violations_storage\",\"faq_analytics_storage\",\"faq_cache_storage\",\"automatic_retry\",\"timeout_protection\"],\"features\":[\"question_enhancement\",\"answer_optimization\",\"seo_analysis\",\"quality_scoring\",\"enhanced_rate_limiting\",\"ip_management\"],\"health_indicators\":{\"config_health\":\"degraded\",\"kv_health\":\"operational\",\"cache_health\":\"degraded\",\"ai_health\":\"available\",\"overall_system_health\":\"degraded\"}}",
+    "Headers": {
+      "Date": [
+        "Fri, 20 Jun 2025 14:26:10 GMT"
+      ],
+      "Transfer-Encoding": [
+        "chunked"
+      ],
+      "Connection": [
+        "keep-alive"
+      ],
+      "Access-Control-Allow-Origin": [
+        "*"
+      ],
+      "Access-Control-Allow-Headers": [
+        "Content-Type"
+      ],
+      "Access-Control-Allow-Methods": [
+        "GET, POST, OPTIONS"
+      ],
+      "Access-Control-Max-Age": [
+        "86400"
+      ],
+      "Report-To": [
+        "{\"endpoints\":[{\"url\":\"https:\\/\\/a.nel.cloudflare.com\\/report\\/v4?s=sX86RrOAnL21O7iUpMoBNM2lVmSf1GNHYSD%2BIMuzedPjSE80Anr1o2c4FGoSlplEhF4cMMS4sp2ffeauWN4dzNmp7dAOIg949ImOqheXEeIreEMZK%2BiiO1%2BLBIp7depOushKaurc8MDy1ViZyK0yu%2BVQgOngspOCE0NHAE0P3Ih9Hl93DQ8%3D\"}],\"group\":\"cf-nel\",\"max_age\":604800}"
+      ],
+      "Nel": [
+        "{\"success_fraction\":0,\"report_to\":\"cf-nel\",\"max_age\":604800}"
+      ],
+      "Vary": [
+        "Accept-Encoding"
+      ],
+      "Server": [
+        "cloudflare"
+      ],
+      "Cf-Ray": [
+        "952bf0778888cd67-LHR"
+      ],
+      "Alt-Svc": [
+        "h3=\":443\""
+      ],
+      "Server-Timing": [
+        "cfL4;desc=\"?proto=TCP&rtt=24987&min_rtt=24858&rtt_var=9581&sent=4&recv=6&lost=0&retrans=0&sent_bytes=2875&recv_bytes=796&delivery_rate=112763&cwnd=251&unsent_bytes=0&cid=0276e73169e8fbfa&ts=4273&x=0\""
+      ],
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Success": true,
+    "ErrorMessage": null
+  },
+  {
+    "WorkerName": "FAQ Proxy Fetch",
+    "Endpoint": "https://faq-proxy-fetch.winter-cake-bf57.workers.dev/health",
+    "StatusCode": 200,
+    "StatusDescription": "OK",
+    "ResponseTime": 3221.5,
+    "ContentLength": 1397,
+    "ResponseBody": "{\"status\":\"degraded\",\"service\":\"faq-proxy-fetch\",\"timestamp\":\"2025-06-20T14:26:14.112Z\",\"server_time\":1750429574112,\"version\":\"1.0.0-enhanced-rate-limiting\",\"model\":{\"name\":\"@cf/meta/llama-3.1-8b-instruct\",\"max_tokens\":200,\"temperature\":0.1,\"timeout\":30000,\"retries\":3},\"configuration\":{\"source\":\"custom\",\"last_updated\":\"2025-06-18 12:38:45\",\"cache_status\":\"cached\",\"config_version\":1,\"fallback_used\":false},\"performance\":{\"avg_response_time_ms\":0,\"uptime_percentage\":95,\"cache_hit_rate_percentage\":0,\"error_rate_percentage\":0,\"last_successful_operation\":null,\"total_requests_served\":0},\"operational_status\":{\"health\":\"degraded\",\"ai_binding_available\":false,\"kv_stores_available\":{\"available_stores\":2,\"total_stores\":3,\"percentage\":67},\"cache_operational\":false,\"config_loaded\":true,\"last_health_check\":\"2025-06-20T14:26:14.112Z\"},\"capabilities\":[\"ai_processing_llama_3.1_8b_instruct\",\"dynamic_configuration\",\"faq_rate_limits_storage\",\"faq_ip_whitelist_storage\",\"faq_ip_blacklist_storage\",\"faq_violations_storage\",\"faq_analytics_storage\",\"faq_cache_storage\",\"automatic_retry\",\"timeout_protection\"],\"features\":[\"faq_extraction\",\"schema_parsing\",\"json_ld\",\"microdata\",\"rdfa\",\"enhanced_rate_limiting\",\"ip_management\",\"origin_validation\"],\"health_indicators\":{\"config_health\":\"degraded\",\"kv_health\":\"operational\",\"cache_health\":\"degraded\",\"ai_health\":\"unavailable\",\"overall_system_health\":\"degraded\"}}",
+    "Headers": {
+      "Date": [
+        "Fri, 20 Jun 2025 14:26:14 GMT"
+      ],
+      "Transfer-Encoding": [
+        "chunked"
+      ],
+      "Connection": [
+        "keep-alive"
+      ],
+      "Access-Control-Allow-Origin": [
+        "*"
+      ],
+      "Access-Control-Allow-Headers": [
+        "Content-Type"
+      ],
+      "Access-Control-Allow-Methods": [
+        "GET, HEAD, POST, OPTIONS"
+      ],
+      "Report-To": [
+        "{\"endpoints\":[{\"url\":\"https:\\/\\/a.nel.cloudflare.com\\/report\\/v4?s=uQV6CJTlaRdt4bpIWHkytRJP1WZZ%2Fol80REjVnriBP6v8r%2FqysuM%2BeNw2syh2KtcJJv%2FxTPqNALawIF0koAFOMMK7Na49fVr22HPKQ41JuhcNDnjf8kduNZqAGniIY4EMdFn2ywp32y9Ld3dbTLhrcFQOHTxe5mv%2BgGjdmU6Mg%3D%3D\"}],\"group\":\"cf-nel\",\"max_age\":604800}"
+      ],
+      "Nel": [
+        "{\"success_fraction\":0,\"report_to\":\"cf-nel\",\"max_age\":604800}"
+      ],
+      "Vary": [
+        "Accept-Encoding"
+      ],
+      "Server": [
+        "cloudflare"
+      ],
+      "Cf-Ray": [
+        "952bf092faf86409-LHR"
+      ],
+      "Alt-Svc": [
+        "h3=\":443\""
+      ],
+      "Server-Timing": [
+        "cfL4;desc=\"?proto=TCP&rtt=27926&min_rtt=27880&rtt_var=10488&sent=4&recv=6&lost=0&retrans=0&sent_bytes=2877&recv_bytes=782&delivery_rate=104734&cwnd=250&unsent_bytes=0&cid=7884a750a5d5c9a2&ts=3124&x=0\""
+      ],
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Success": true,
+    "ErrorMessage": null
+  },
+  {
+    "WorkerName": "FAQ Realtime Assistant",
+    "Endpoint": "https://faq-realtime-assistant-worker.winter-cake-bf57.workers.dev/health",
+    "StatusCode": 200,
+    "StatusDescription": "OK",
+    "ResponseTime": 4855.82,
+    "ContentLength": 1440,
+    "ResponseBody": "{\"status\":\"degraded\",\"service\":\"faq-realtime-assistant-worker\",\"timestamp\":\"2025-06-20T14:26:18.970Z\",\"server_time\":1750429578970,\"version\":\"2.0.0\",\"model\":{\"name\":\"@cf/meta/llama-3.1-8b-instruct\",\"max_tokens\":300,\"temperature\":0.2,\"timeout\":30000,\"retries\":3},\"configuration\":{\"source\":\"default\",\"last_updated\":\"2025-06-20T14:22:42.693Z\",\"cache_status\":\"cached\",\"config_version\":1,\"fallback_used\":false},\"performance\":{\"avg_response_time_ms\":0,\"uptime_percentage\":95,\"cache_hit_rate_percentage\":0,\"error_rate_percentage\":0,\"last_successful_operation\":null,\"total_requests_served\":0},\"operational_status\":{\"health\":\"degraded\",\"ai_binding_available\":true,\"kv_stores_available\":{\"available_stores\":3,\"total_stores\":3,\"percentage\":100},\"cache_operational\":false,\"config_loaded\":true,\"last_health_check\":\"2025-06-20T14:26:18.970Z\"},\"capabilities\":[\"ai_processing_llama_3.1_8b_instruct\",\"faq_rate_limits_storage\",\"faq_ip_whitelist_storage\",\"faq_ip_blacklist_storage\",\"faq_violations_storage\",\"faq_analytics_storage\",\"faq_cache_storage\",\"automatic_retry\",\"timeout_protection\"],\"features\":[\"contextual_question_suggestions\",\"typing_assistance\",\"question_improvement\",\"validation_tips\",\"duplicate_detection\",\"grammar_checking\",\"seo_optimization\",\"enhanced_rate_limiting\",\"ip_management\"],\"health_indicators\":{\"config_health\":\"degraded\",\"kv_health\":\"operational\",\"cache_health\":\"degraded\",\"ai_health\":\"available\",\"overall_system_health\":\"degraded\"}}",
+    "Headers": {
+      "Date": [
+        "Fri, 20 Jun 2025 14:26:18 GMT"
+      ],
+      "Transfer-Encoding": [
+        "chunked"
+      ],
+      "Connection": [
+        "keep-alive"
+      ],
+      "Access-Control-Allow-Origin": [
+        "*"
+      ],
+      "Cache-Control": [
+        "no-cache"
+      ],
+      "Access-Control-Allow-Headers": [
+        "Content-Type, X-Request-ID"
+      ],
+      "Access-Control-Allow-Methods": [
+        "GET, POST, OPTIONS"
+      ],
+      "Access-Control-Max-Age": [
+        "86400"
+      ],
+      "Report-To": [
+        "{\"endpoints\":[{\"url\":\"https:\\/\\/a.nel.cloudflare.com\\/report\\/v4?s=vKJtFJGl3TCSuirIfXhkkpbfgfjHHu3XXI0QysCPBJ%2F2R%2FlezSeFNTXRKNZh1JnDI%2Bc1NS3N5n9rtn2RG%2BT6NGIGzIj5guTgTgdZeNERFSquxhSoQ%2F1P2N80gfyEWW5jPCjnq2FjaqcxNVK3qNxrYqw5SKpzMsF7wQ9sYz0T2s8ykrfgVCHP1AkiiaLS\"}],\"group\":\"cf-nel\",\"max_age\":604800}"
+      ],
+      "Nel": [
+        "{\"success_fraction\":0,\"report_to\":\"cf-nel\",\"max_age\":604800}"
+      ],
+      "Vary": [
+        "Accept-Encoding"
+      ],
+      "Server": [
+        "cloudflare"
+      ],
+      "Cf-Ray": [
+        "952bf0a72f08770d-LHR"
+      ],
+      "Alt-Svc": [
+        "h3=\":443\""
+      ],
+      "Server-Timing": [
+        "cfL4;desc=\"?proto=TCP&rtt=27482&min_rtt=27142&rtt_var=10421&sent=4&recv=6&lost=0&retrans=0&sent_bytes=2876&recv_bytes=810&delivery_rate=107582&cwnd=251&unsent_bytes=0&cid=7b3d48283517a022&ts=4754&x=0\""
+      ],
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Success": true,
+    "ErrorMessage": null
+  },
+  {
+    "WorkerName": "FAQ SEO Analyzer",
+    "Endpoint": "https://faq-seo-analyzer-worker.winter-cake-bf57.workers.dev/health",
+    "StatusCode": 200,
+    "StatusDescription": "OK",
+    "ResponseTime": 3751.27,
+    "ContentLength": 1394,
+    "ResponseBody": "{\"status\":\"degraded\",\"service\":\"faq-seo-analyzer-worker\",\"timestamp\":\"2025-06-20T14:26:22.722Z\",\"server_time\":1750429582722,\"version\":\"1.0.0-enhanced-rate-limiting\",\"model\":{\"name\":\"@cf/meta/llama-3.1-8b-instruct\",\"max_tokens\":400,\"temperature\":0.3,\"timeout\":30000,\"retries\":3},\"configuration\":{\"source\":\"default\",\"last_updated\":\"2025-06-20T14:26:19.148Z\",\"cache_status\":\"cached\",\"config_version\":1,\"fallback_used\":false},\"performance\":{\"avg_response_time_ms\":0,\"uptime_percentage\":95,\"cache_hit_rate_percentage\":0,\"error_rate_percentage\":0,\"last_successful_operation\":null,\"total_requests_served\":0},\"operational_status\":{\"health\":\"degraded\",\"ai_binding_available\":true,\"kv_stores_available\":{\"available_stores\":2,\"total_stores\":3,\"percentage\":67},\"cache_operational\":false,\"config_loaded\":true,\"last_health_check\":\"2025-06-20T14:26:22.722Z\"},\"capabilities\":[\"ai_processing_llama_3.1_8b_instruct\",\"faq_rate_limits_storage\",\"faq_ip_whitelist_storage\",\"faq_ip_blacklist_storage\",\"faq_violations_storage\",\"faq_analytics_storage\",\"faq_cache_storage\",\"automatic_retry\",\"timeout_protection\"],\"features\":[\"seo_analysis\",\"readability_scoring\",\"voice_search_optimization\",\"featured_snippet_analysis\",\"enhanced_rate_limiting\",\"ip_management\"],\"health_indicators\":{\"config_health\":\"degraded\",\"kv_health\":\"operational\",\"cache_health\":\"degraded\",\"ai_health\":\"available\",\"overall_system_health\":\"degraded\"}}",
+    "Headers": {
+      "Date": [
+        "Fri, 20 Jun 2025 14:26:22 GMT"
+      ],
+      "Transfer-Encoding": [
+        "chunked"
+      ],
+      "Connection": [
+        "keep-alive"
+      ],
+      "Access-Control-Allow-Origin": [
+        "*"
+      ],
+      "Access-Control-Allow-Headers": [
+        "Content-Type"
+      ],
+      "Access-Control-Allow-Methods": [
+        "GET, POST, OPTIONS"
+      ],
+      "Report-To": [
+        "{\"endpoints\":[{\"url\":\"https:\\/\\/a.nel.cloudflare.com\\/report\\/v4?s=QtKj7%2Bj0Znupr3t8mecz9B1AqlUIKSXyU%2BTNJJvP3EsUROk2OOHxZ0x%2FyVz1%2Bu2aiFWt8d6%2Fg5hx%2Fj8MijvlorMZ5AowtUsmnVu41K25EGf8umrs%2BuRgJYrvmBBV92DZ5ebnIDGeR%2BmGJryiHpnOtCbx6V5MlAYjKsx0ov5syRz7VXogmKi7\"}],\"group\":\"cf-nel\",\"max_age\":604800}"
+      ],
+      "Nel": [
+        "{\"success_fraction\":0,\"report_to\":\"cf-nel\",\"max_age\":604800}"
+      ],
+      "Vary": [
+        "Accept-Encoding"
+      ],
+      "Server": [
+        "cloudflare"
+      ],
+      "Cf-Ray": [
+        "952bf0c578da35dc-LHR"
+      ],
+      "Alt-Svc": [
+        "h3=\":443\""
+      ],
+      "Server-Timing": [
+        "cfL4;desc=\"?proto=TCP&rtt=29588&min_rtt=27834&rtt_var=13947&sent=4&recv=5&lost=0&retrans=0&sent_bytes=2876&recv_bytes=798&delivery_rate=69738&cwnd=251&unsent_bytes=0&cid=97544cf5c6a8ce3f&ts=3663&x=0\""
+      ],
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Success": true,
+    "ErrorMessage": null
+  },
+  {
+    "WorkerName": "URL to FAQ Generator",
+    "Endpoint": "https://url-to-faq-generator-worker.winter-cake-bf57.workers.dev/health",
+    "StatusCode": 200,
+    "StatusDescription": "OK",
+    "ResponseTime": 3442.92,
+    "ContentLength": 1380,
+    "ResponseBody": "{\"status\":\"degraded\",\"service\":\"url-to-faq-generator-worker\",\"timestamp\":\"2025-06-20T14:26:26.169Z\",\"server_time\":1750429586169,\"version\":\"4.0.0-enhanced-rate-limited\",\"model\":{\"name\":\"@cf/meta/llama-3.1-8b-instruct\",\"max_tokens\":800,\"temperature\":0.4,\"timeout\":30000,\"retries\":3},\"configuration\":{\"source\":\"default\",\"last_updated\":\"2025-06-20T14:26:22.899Z\",\"cache_status\":\"cached\",\"config_version\":1,\"fallback_used\":false},\"performance\":{\"avg_response_time_ms\":0,\"uptime_percentage\":95,\"cache_hit_rate_percentage\":0,\"error_rate_percentage\":0,\"last_successful_operation\":null,\"total_requests_served\":0},\"operational_status\":{\"health\":\"degraded\",\"ai_binding_available\":true,\"kv_stores_available\":{\"available_stores\":2,\"total_stores\":3,\"percentage\":67},\"cache_operational\":false,\"config_loaded\":true,\"last_health_check\":\"2025-06-20T14:26:26.169Z\"},\"capabilities\":[\"ai_processing_llama_3.1_8b_instruct\",\"faq_rate_limits_storage\",\"faq_ip_whitelist_storage\",\"faq_ip_blacklist_storage\",\"faq_violations_storage\",\"faq_analytics_storage\",\"faq_cache_storage\",\"automatic_retry\",\"timeout_protection\"],\"features\":[\"url_analysis\",\"deep_content_extraction\",\"premium_faq_generation\",\"multi_pass_optimization\",\"enhanced_rate_limiting\"],\"health_indicators\":{\"config_health\":\"degraded\",\"kv_health\":\"operational\",\"cache_health\":\"degraded\",\"ai_health\":\"available\",\"overall_system_health\":\"degraded\"}}",
+    "Headers": {
+      "Date": [
+        "Fri, 20 Jun 2025 14:26:26 GMT"
+      ],
+      "Transfer-Encoding": [
+        "chunked"
+      ],
+      "Connection": [
+        "keep-alive"
+      ],
+      "Access-Control-Allow-Origin": [
+        "*"
+      ],
+      "Access-Control-Allow-Headers": [
+        "Content-Type"
+      ],
+      "Access-Control-Allow-Methods": [
+        "GET, POST, OPTIONS"
+      ],
+      "Report-To": [
+        "{\"endpoints\":[{\"url\":\"https:\\/\\/a.nel.cloudflare.com\\/report\\/v4?s=A2g4FWgXCQAC8vJmGKzCQFJgzt3Y8hhSrxNN8Rlx4u%2BZAxQfYf2wtNovhPsanHIPh6FhfBWPGlPASGjsfcrOEE%2B9h2pbykTpjJw6WCvI4ByKbiH9Kq7C9cGuNzGj7c%2BQFXhgV0LNQtZQV64%2BXrirbzLVJVZbUmOM0Vaox%2BI8BUzRtDR2525rfZrJ%2BQ%3D%3D\"}],\"group\":\"cf-nel\",\"max_age\":604800}"
+      ],
+      "Nel": [
+        "{\"success_fraction\":0,\"report_to\":\"cf-nel\",\"max_age\":604800}"
+      ],
+      "Vary": [
+        "Accept-Encoding"
+      ],
+      "Server": [
+        "cloudflare"
+      ],
+      "Cf-Ray": [
+        "952bf0dcdd73459a-LHR"
+      ],
+      "Alt-Svc": [
+        "h3=\":443\""
+      ],
+      "Server-Timing": [
+        "cfL4;desc=\"?proto=TCP&rtt=26077&min_rtt=25529&rtt_var=9965&sent=4&recv=6&lost=0&retrans=0&sent_bytes=2875&recv_bytes=806&delivery_rate=114379&cwnd=251&unsent_bytes=0&cid=be9b8d94e1b4c5ae&ts=3360&x=0\""
+      ],
+      "Content-Type": [
+        "application/json"
+      ]
+    },
+    "Success": true,
+    "ErrorMessage": null
+  }
+]

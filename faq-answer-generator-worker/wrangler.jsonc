@@ -34,11 +34,15 @@
     {
       "binding": "FAQ_ANALYTICS",
       "id": "a3573648cc1d4c1990a06090dab3e646"
+    },
+    {
+      "binding": "AI_MODEL_CONFIG",
+      "id": "e4a2fb4ce24949e3bac458c4176dfecd"
     }
   ],
   "vars": {
-    "WORKER_VERSION": "2.1.0-contextual-redesign",
+    "WORKER_VERSION": "3.1.0-advanced-cache-optimized",
     "MODEL_NAME": "@cf/meta/llama-3.1-8b-instruct",
-    "FEATURE_SET": "contextual-answer-suggestions-with-cache"
+    "FEATURE_SET": "advanced-contextual-suggestions-with-optimized-cache"
   }
 }

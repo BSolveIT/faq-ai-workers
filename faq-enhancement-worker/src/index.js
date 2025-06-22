@@ -6,6 +6,101 @@
 const { htmlToText } = require('html-to-text');
 const { parse: parseHTML } = require('node-html-parser');
 import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
+import { generateDynamicHealthResponse, trackCacheHit, trackCacheMiss } from '../../shared/health-utils.js';
+import { cacheAIModelConfig } from '../../shared/advanced-cache-manager.js';
+
+/**
+ * Get AI model name dynamically from KV store with enhanced caching
+ */
+async function getAIModel(env, workerType = 'faq_enhancer') {
+  try {
+    console.log(`[AI Model Cache] Retrieving model config for ${workerType} with enhanced caching...`);
+    
+    // Use the advanced cache manager for AI model config
+    const configData = await cacheAIModelConfig('ai_model_config', env, async () => {
+      console.log(`[AI Model Cache] Cache miss - loading fresh config from KV...`);
+      const freshConfig = await env.AI_MODEL_CONFIG?.get('ai_model_config', { type: 'json' });
+      
+      if (!freshConfig) {
+        console.log(`[AI Model Cache] No config found in KV, returning null for cache`);
+        return null;
+      }
+      
+      console.log(`[AI Model Cache] Loaded fresh config:`, Object.keys(freshConfig));
+      return freshConfig;
+    });
+    
+    // Extract the specific model for this worker type
+    if (configData?.ai_models?.[workerType]) {
+      console.log(`[AI Model Cache] ✅ Using cached dynamic model for ${workerType}: ${configData.ai_models[workerType]}`);
+      return configData.ai_models[workerType];
+    }
+    
+    console.log(`[AI Model Cache] No dynamic model found for ${workerType} in cached config, checking fallback`);
+  } catch (error) {
+    console.error(`[AI Model Cache] Error with cached retrieval: ${error.message}`);
+  }
+  
+  // Fallback to env.MODEL_NAME or hardcoded default
+  const fallbackModel = env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct';
+  console.log(`[AI Model Cache] ✅ Using fallback model for ${workerType}: ${fallbackModel}`);
+  return fallbackModel;
+}
+
+/**
+ * Get AI model info with source information for health endpoint
+ */
+async function getAIModelInfo(env, workerType = 'faq_enhancer') {
+  try {
+    console.log(`[AI Model Info] Retrieving model info for ${workerType}...`);
+    
+    // Use the advanced cache manager for AI model config
+    const configData = await cacheAIModelConfig('ai_model_config', env, async () => {
+      console.log(`[AI Model Info] Cache miss - loading fresh config from KV...`);
+      const freshConfig = await env.AI_MODEL_CONFIG?.get('ai_model_config', { type: 'json' });
+      
+      if (!freshConfig) {
+        console.log(`[AI Model Info] No config found in KV, returning null for cache`);
+        return null;
+      }
+      
+      console.log(`[AI Model Info] Loaded fresh config:`, Object.keys(freshConfig));
+      return freshConfig;
+    });
+    
+    // Extract the specific model for this worker type
+    if (configData?.ai_models?.[workerType]) {
+      console.log(`[AI Model Info] ✅ Using cached dynamic model for ${workerType}: ${configData.ai_models[workerType]}`);
+      return {
+        current_model: configData.ai_models[workerType],
+        model_source: 'kv_config',
+        worker_type: workerType
+      };
+    }
+    
+    console.log(`[AI Model Info] No dynamic model found for ${workerType} in cached config, checking fallback`);
+  } catch (error) {
+    console.error(`[AI Model Info] Error with cached retrieval: ${error.message}`);
+  }
+  
+  // Fallback to env.MODEL_NAME or hardcoded default
+  if (env.MODEL_NAME) {
+    console.log(`[AI Model Info] ✅ Using env fallback model for ${workerType}: ${env.MODEL_NAME}`);
+    return {
+      current_model: env.MODEL_NAME,
+      model_source: 'env_fallback',
+      worker_type: workerType
+    };
+  }
+  
+  const hardcodedDefault = '@cf/meta/llama-3.1-8b-instruct';
+  console.log(`[AI Model Info] ✅ Using hardcoded default model for ${workerType}: ${hardcodedDefault}`);
+  return {
+    current_model: hardcodedDefault,
+    model_source: 'hardcoded_default',
+    worker_type: workerType
+  };
+}
 
 // Session-based context caching to reduce duplicate fetching
 const sessionContextCache = new Map();
@@ -31,34 +126,58 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
 
-    // Health check endpoint
+    // EMERGENCY HEALTH CHECK - with timeout protection
     if (request.method === 'GET') {
       const url = new URL(request.url);
       if (url.pathname === '/health') {
-        return new Response(JSON.stringify({
-          status: 'healthy',
-          service: 'faq-enhancement-worker',
-          timestamp: new Date().toISOString(),
-          version: '3.0.0-enhanced-rate-limiting',
-          model: '@cf/meta/llama-3.1-8b-instruct',
-          features: ['question_enhancement', 'answer_optimization', 'seo_analysis', 'quality_scoring', 'enhanced_rate_limiting', 'ip_management'],
-          rate_limits: {
-            hourly: 15,
-            daily: 50,
-            weekly: 250,
-            monthly: 1000
-          },
-          capabilities: [
-            'multi_tier_rate_limiting',
-            'ip_whitelist_blacklist',
-            'violation_tracking',
-            'progressive_penalties',
-            'geographic_restrictions'
-          ]
-        }), {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
+        try {
+          // EMERGENCY: Execute health check with timeout protection
+          const healthPromise = generateDynamicHealthResponse(
+            'faq-enhancement-worker',
+            env,
+            '3.1.0-advanced-cache-optimized',
+            ['question_enhancement', 'answer_optimization', 'seo_analysis', 'quality_scoring', 'enhanced_rate_limiting', 'ip_management']
+          );
+          
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Health check timeout')), 400)
+          );
+          
+          const healthResponse = await Promise.race([healthPromise, timeoutPromise]);
+          
+          // Add AI model information to health response
+          const aiModelInfo = await getAIModelInfo(env, 'faq_enhancer');
+          healthResponse.current_model = aiModelInfo.current_model;
+          healthResponse.model_source = aiModelInfo.model_source;
+          healthResponse.worker_type = aiModelInfo.worker_type;
+          
+          return new Response(JSON.stringify(healthResponse), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+          
+        } catch (error) {
+          console.warn('[Health Check] EMERGENCY fallback for faq-enhancement-worker:', error.message);
+          
+          // EMERGENCY: Always return HTTP 200 to prevent monitoring cascade failures
+          const emergencyResponse = {
+            worker: 'faq-enhancement-worker',
+            status: 'healthy',
+            timestamp: new Date().toISOString(),
+            version: '3.1.0-advanced-cache-optimized',
+            capabilities: ['question_enhancement', 'answer_optimization', 'seo_analysis', 'quality_scoring', 'enhanced_rate_limiting', 'ip_management'],
+            current_model: env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct',
+            model_source: 'env_fallback',
+            worker_type: 'faq_enhancer',
+            rate_limiting: { enabled: true, enhanced: true },
+            cache_status: 'active'
+          };
+          
+          return new Response(JSON.stringify(emergencyResponse), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
       }
     }
 
@@ -241,6 +360,10 @@ IMPORTANT: Return ONLY the JSON object above. No other text.`;
       // Record usage in enhanced rate limiting system (before processing)
       // This will be recorded again after successful completion
 
+      // Get dynamic AI model for this worker
+      const aiModel = await getAIModel(env, 'faq_enhancer');
+      console.log(`[AI Model] Using model: ${aiModel} for faq_enhancer worker`);
+
       // AI call with retry logic and timeout protection
       const MAX_WAIT_TIME = 15000; // 15 seconds max per attempt
       const MAX_RETRIES = 3;
@@ -250,26 +373,26 @@ IMPORTANT: Return ONLY the JSON object above. No other text.`;
       
       for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
-          console.log(`AI call attempt ${attempt}/${MAX_RETRIES}...`);
+          console.log(`AI call attempt ${attempt}/${MAX_RETRIES} using model: ${aiModel}...`);
           
           // Create timeout promise
-          const timeoutPromise = new Promise((_, reject) => 
+          const timeoutPromise = new Promise((_, reject) =>
             setTimeout(() => reject(new Error(`AI timeout after ${MAX_WAIT_TIME/1000} seconds`)), MAX_WAIT_TIME)
           );
           
           // Race between AI call and timeout
           const aiResponse = await Promise.race([
             env.AI.run(
-              '@cf/meta/llama-3.1-8b-instruct', // UPDATED MODEL
+              aiModel, // DYNAMIC MODEL FROM KV CONFIG
               {
                 messages: [
-                  { 
-                    role: 'system', 
+                  {
+                    role: 'system',
                     content: 'You are an expert FAQ optimizer. CRITICAL: Return ONLY valid JSON. No explanations, no introductory text, no comments. Your response must begin with { and end with }. Create 2-3 question variations with exactly 2 answer types each: "optimised" (50-100 words for featured snippets) and "detailed" (200-300 words for comprehensive coverage).'
                   },
-                  { 
-                    role: 'user', 
-                    content: enhancementPrompt 
+                  {
+                    role: 'user',
+                    content: enhancementPrompt
                   }
                 ],
                 temperature: 0.7,
@@ -344,8 +467,10 @@ IMPORTANT: Return ONLY the JSON object above. No other text.`;
             limits: rateLimitResult.limits,
             reset_times: rateLimitResult.reset_times,
             model_info: {
-              model: '@cf/meta/llama-3.1-8b-instruct',
-              version: env.WORKER_VERSION || '3.0.0-enhanced-rate-limiting',
+              model: aiModel,
+              worker_type: 'faq_enhancer',
+              dynamic_model: true,
+              version: env.WORKER_VERSION || '3.1.0-advanced-cache-optimized',
               processingTime: Date.now() - startTime,
               page_context_extracted: pageContext.length > 0,
               cache_status: sessionContextCache.has(`${sessionId || 'no-session'}:${pageUrl}`) ? 'hit' : 'miss',
@@ -455,10 +580,12 @@ async function getCachedPageContext(pageUrl, sessionId) {
   
   // Check cache first
   if (sessionContextCache.has(cacheKey)) {
+    trackCacheHit();
     console.log(`Cache HIT for ${cacheKey} - returning cached context`);
     return sessionContextCache.get(cacheKey);
   }
   
+  trackCacheMiss();
   console.log(`Cache MISS for ${cacheKey} - extracting new context`);
   
   // Extract new context

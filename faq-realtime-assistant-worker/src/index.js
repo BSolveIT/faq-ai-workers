@@ -23,6 +23,101 @@
  */
 
 import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
+import { generateDynamicHealthResponse, trackCacheHit, trackCacheMiss } from '../../shared/health-utils.js';
+import { cacheAIModelConfig } from '../../shared/advanced-cache-manager.js';
+
+/**
+ * Get AI model name dynamically from KV store with enhanced caching
+ */
+async function getAIModel(env, workerType = 'question_generator') {
+  try {
+    console.log(`[AI Model Cache] Retrieving model config for ${workerType} with enhanced caching...`);
+    
+    // Use the advanced cache manager for AI model config
+    const configData = await cacheAIModelConfig('ai_model_config', env, async () => {
+      console.log(`[AI Model Cache] Cache miss - loading fresh config from KV...`);
+      const freshConfig = await env.AI_MODEL_CONFIG?.get('ai_model_config', { type: 'json' });
+      
+      if (!freshConfig) {
+        console.log(`[AI Model Cache] No config found in KV, returning null for cache`);
+        return null;
+      }
+      
+      console.log(`[AI Model Cache] Loaded fresh config:`, Object.keys(freshConfig));
+      return freshConfig;
+    });
+    
+    // Extract the specific model for this worker type
+    if (configData?.ai_models?.[workerType]) {
+      console.log(`[AI Model Cache] ✅ Using cached dynamic model for ${workerType}: ${configData.ai_models[workerType]}`);
+      return configData.ai_models[workerType];
+    }
+    
+    console.log(`[AI Model Cache] No dynamic model found for ${workerType} in cached config, checking fallback`);
+  } catch (error) {
+    console.error(`[AI Model Cache] Error with cached retrieval: ${error.message}`);
+  }
+  
+  // Fallback to env.MODEL_NAME or hardcoded default
+  const fallbackModel = env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct';
+  console.log(`[AI Model Cache] ✅ Using fallback model for ${workerType}: ${fallbackModel}`);
+  return fallbackModel;
+}
+
+/**
+ * Get AI model info with source information for health endpoint
+ */
+async function getAIModelInfo(env, workerType = 'question_generator') {
+  try {
+    console.log(`[AI Model Info] Retrieving model info for ${workerType}...`);
+    
+    // Use the advanced cache manager for AI model config
+    const configData = await cacheAIModelConfig('ai_model_config', env, async () => {
+      console.log(`[AI Model Info] Cache miss - loading fresh config from KV...`);
+      const freshConfig = await env.AI_MODEL_CONFIG?.get('ai_model_config', { type: 'json' });
+      
+      if (!freshConfig) {
+        console.log(`[AI Model Info] No config found in KV, returning null for cache`);
+        return null;
+      }
+      
+      console.log(`[AI Model Info] Loaded fresh config:`, Object.keys(freshConfig));
+      return freshConfig;
+    });
+    
+    // Extract the specific model for this worker type
+    if (configData?.ai_models?.[workerType]) {
+      console.log(`[AI Model Info] ✅ Using cached dynamic model for ${workerType}: ${configData.ai_models[workerType]}`);
+      return {
+        current_model: configData.ai_models[workerType],
+        model_source: 'kv_config',
+        worker_type: workerType
+      };
+    }
+    
+    console.log(`[AI Model Info] No dynamic model found for ${workerType} in cached config, checking fallback`);
+  } catch (error) {
+    console.error(`[AI Model Info] Error with cached retrieval: ${error.message}`);
+  }
+  
+  // Fallback to env.MODEL_NAME or hardcoded default
+  if (env.MODEL_NAME) {
+    console.log(`[AI Model Info] ✅ Using env fallback model for ${workerType}: ${env.MODEL_NAME}`);
+    return {
+      current_model: env.MODEL_NAME,
+      model_source: 'env_fallback',
+      worker_type: workerType
+    };
+  }
+  
+  const hardcodedDefault = '@cf/meta/llama-3.1-8b-instruct';
+  console.log(`[AI Model Info] ✅ Using hardcoded default model for ${workerType}: ${hardcodedDefault}`);
+  return {
+    current_model: hardcodedDefault,
+    model_source: 'hardcoded_default',
+    worker_type: workerType
+  };
+}
 
 /**
  * Improve grammar and formatting of text suggestions
@@ -236,14 +331,11 @@ export default {
     if (request.method === 'GET') {
       const url = new URL(request.url);
       if (url.pathname === '/health') {
-        return new Response(JSON.stringify({
-          status: 'healthy',
-          worker: 'faq-realtime-assistant-worker',
-          timestamp: Date.now(),
-          version: '2.0.0',
-          model: '@cf/meta/llama-3.1-8b-instruct',
-          endpoints: ['/'],
-          capabilities: [
+        const healthResponse = await generateDynamicHealthResponse(
+          'faq-realtime-assistant-worker',
+          env,
+          '3.1.0-advanced-cache-optimized',
+          [
             'contextual_question_suggestions',
             'typing_assistance',
             'question_improvement',
@@ -253,27 +345,23 @@ export default {
             'seo_optimization',
             'enhanced_rate_limiting',
             'ip_management'
-          ],
-          rate_limits: {
-            hourly: 30,
-            daily: 200,
-            weekly: 1000,
-            monthly: 4000
-          },
-          performance: {
-            avg_response_time: '2.8s',
-            uptime_percentage: 99.9,
-            cache_hit_rate: '75%'
-          },
-          features: {
-            jit_learning: true,
-            website_context_integration: true,
-            duplicate_prevention: true,
-            enhanced_grammar_checking: true
-          }
-        }), {
+          ]
+        );
+        
+        // Add AI model information to health response
+        const aiModelInfo = await getAIModelInfo(env, 'question_generator');
+        healthResponse.current_model = aiModelInfo.current_model;
+        healthResponse.model_source = aiModelInfo.model_source;
+        healthResponse.worker_type = 'question_generator';
+        healthResponse.rate_limiting = {
+          enabled: true,
+          enhanced: true
+        };
+        healthResponse.cache_status = 'active';
+        
+        return new Response(JSON.stringify(healthResponse), {
           status: 200,
-          headers: { 
+          headers: {
             ...corsHeaders,
             'Content-Type': 'application/json',
             'Cache-Control': 'no-cache'
@@ -404,6 +492,7 @@ export default {
           cacheCheckDuration = ((Date.now() - cacheStartTime) / 1000).toFixed(2);
           
           if (cached) {
+            trackCacheHit();
             console.log(`[Main Handler] Cache HIT in ${cacheCheckDuration}s - returning cached response`);
             // Ensure cached response has grammar_checked flag
             if (cached.metadata) {
@@ -414,6 +503,7 @@ export default {
               headers: { ...corsHeaders, 'Content-Type': 'application/json' }
             });
           } else {
+            trackCacheMiss();
             console.log(`[Main Handler] Cache MISS in ${cacheCheckDuration}s - proceeding with AI generation`);
           }
         } else {
@@ -485,7 +575,7 @@ export default {
           duplicatesAvoided: questionAnalysis.duplicatesAvoided || 0
         },
         metadata: {
-          model: '@cf/meta/llama-3.1-8b-instruct',
+          model: await getAIModel(env, 'question_generator'),
           neurons_used: 2, // Updated for Llama 3.1 8B
           context_applied: websiteContext ? true : false,
           page_url_provided: pageUrl ? true : false,
@@ -583,11 +673,14 @@ async function generateEnhancedTypingSuggestions(questions, currentAnswer, analy
   const prompt = buildEnhancedTypingPrompt(questions, currentAnswer, analysis, websiteContext);
   console.log(`[Enhanced Typing] Prompt built, calling AI...`);
   
-  const aiResult = await callAIWithRetry(env.AI, '@cf/meta/llama-3.1-8b-instruct', {
+  // Get dynamic AI model for this worker type
+  const aiModel = await getAIModel(env, 'question_generator');
+  
+  const aiResult = await callAIWithRetry(env.AI, aiModel, {
     messages: [
-      { 
-        role: 'system', 
-        content: 'You MUST respond with ONLY a JSON array. Start immediately with [ and end with ]. No markdown, no explanations, no code blocks. Format: [{"text":"question","benefit":"benefit","reason":"reason"}]' 
+      {
+        role: 'system',
+        content: 'You MUST respond with ONLY a JSON array. Start immediately with [ and end with ]. No markdown, no explanations, no code blocks. Format: [{"text":"question","benefit":"benefit","reason":"reason"}]'
       },
       { role: 'user', content: prompt }
     ],
@@ -624,11 +717,14 @@ async function generateEnhancedImprovementSuggestions(questions, currentAnswer, 
   const prompt = buildEnhancedImprovementPrompt(questions, currentAnswer, analysis, websiteContext);
   console.log(`[Enhanced Improvement] Prompt built (${prompt.length} chars), calling AI...`);
   
-  const aiResult = await callAIWithRetry(env.AI, '@cf/meta/llama-3.1-8b-instruct', {
+  // Get dynamic AI model for this worker type
+  const aiModel = await getAIModel(env, 'question_generator');
+  
+  const aiResult = await callAIWithRetry(env.AI, aiModel, {
     messages: [
-      { 
-        role: 'system', 
-        content: 'You MUST respond with ONLY a JSON array. Start immediately with [ and end with ]. No markdown, no explanations, no code blocks. Format: [{"text":"question","benefit":"benefit","reason":"reason"}]' 
+      {
+        role: 'system',
+        content: 'You MUST respond with ONLY a JSON array. Start immediately with [ and end with ]. No markdown, no explanations, no code blocks. Format: [{"text":"question","benefit":"benefit","reason":"reason"}]'
       },
       { role: 'user', content: prompt }
     ],
@@ -664,11 +760,14 @@ async function generateEnhancedValidationTips(questions, currentAnswer, analysis
   const prompt = buildEnhancedValidationPrompt(questions, currentAnswer, analysis, websiteContext);
   console.log(`[Enhanced Validation] Prompt built, calling AI for quality assessment...`);
   
-  const aiResult = await callAIWithRetry(env.AI, '@cf/meta/llama-3.1-8b-instruct', {
+  // Get dynamic AI model for this worker type
+  const aiModel = await getAIModel(env, 'question_generator');
+  
+  const aiResult = await callAIWithRetry(env.AI, aiModel, {
     messages: [
-      { 
-        role: 'system', 
-        content: 'You MUST respond with ONLY a JSON array. Start immediately with [ and end with ]. No markdown, no explanations, no code blocks. Format: [{"text":"tip","benefit":"benefit","reason":"reason"}]' 
+      {
+        role: 'system',
+        content: 'You MUST respond with ONLY a JSON array. Start immediately with [ and end with ]. No markdown, no explanations, no code blocks. Format: [{"text":"tip","benefit":"benefit","reason":"reason"}]'
       },
       { role: 'user', content: prompt }
     ],

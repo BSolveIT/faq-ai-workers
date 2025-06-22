@@ -1,8 +1,8 @@
 {
-	"name": "faq-answer-generator-worker",
-	"version": "3.1.0",
+	"name": "cloudflare-models-api-worker",
+	"version": "1.0.0",
 	"private": true,
-	"description": "Enhanced FAQ Answer Generator Worker with contextual dual-format suggestions and advanced cache optimization",
+	"description": "Comprehensive Cloudflare Worker that dynamically fetches all text generation models from the official Cloudflare API with enhanced metadata",
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
@@ -16,6 +16,7 @@
 		"@cloudflare/vitest-pool-workers": "^0.8.20",
 		"@cloudflare/workers-types": "^4.20250115.0",
 		"vitest": "^3.0.9",
+		"vitest-environment-miniflare": "^2.14.4",
 		"wrangler": "^4.19.2"
 	},
 	"engines": {
@@ -24,9 +25,10 @@
 	"keywords": [
 		"cloudflare-workers",
 		"ai",
-		"faq",
-		"contextual-suggestions",
-		"answer-generation", 
-		"llama-3.1"
+		"models",
+		"text-generation",
+		"api",
+		"metadata",
+		"dynamic-fetch"
 	]
 }

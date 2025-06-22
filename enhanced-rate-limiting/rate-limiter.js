@@ -622,8 +622,8 @@ import { loadWorkerConfig, loadGlobalSettings } from './dynamic-config.js';
  */
 export async function createRateLimiter(env, workerName, customConfig = {}) {
   try {
-    // Load dynamic configuration from KV storage
-    const config = await loadWorkerConfig(env, workerName);
+    // Load dynamic configuration from KV storage with CORRECT parameter order
+    const config = await loadWorkerConfig(workerName, env);
     const globalSettings = await loadGlobalSettings(env);
     
     // Convert dynamic config format to rate limiter format

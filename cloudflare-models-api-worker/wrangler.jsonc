@@ -1,0 +1,61 @@
+{
+  "name": "cloudflare-models-api-worker",
+  "main": "src/index.js",
+  "compatibility_date": "2025-06-07",
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.01
+  },
+  "kv_namespaces": [
+    {
+      "binding": "MODELS_CACHE",
+      "id": "ef9fb24aa9fa405aa9bd438edeee76f3"
+    },
+    {
+      "binding": "MODELS_RATE_LIMITS",
+      "id": "2a9d403010c7489b869b10af4cbabf7f"
+    }
+  ],
+  "vars": {
+    "WORKER_VERSION": "1.0.0",
+    "CACHE_TTL": "300",
+    "API_VERSION": "v4"
+  },
+  "env": {
+    "dev": {
+      "vars": {
+        "WORKER_VERSION": "1.0.0-dev",
+        "CACHE_TTL": "60",
+        "API_VERSION": "v4",
+        "DEBUG_MODE": "true"
+      },
+      "kv_namespaces": [
+        {
+          "binding": "MODELS_CACHE",
+          "id": "ef9fb24aa9fa405aa9bd438edeee76f3"
+        },
+        {
+          "binding": "MODELS_RATE_LIMITS",
+          "id": "2a9d403010c7489b869b10af4cbabf7f"
+        }
+      ]
+    },
+    "production": {
+      "vars": {
+        "WORKER_VERSION": "1.0.0",
+        "CACHE_TTL": "300",
+        "API_VERSION": "v4"
+      },
+      "kv_namespaces": [
+        {
+          "binding": "MODELS_CACHE",
+          "id": "ef9fb24aa9fa405aa9bd438edeee76f3"
+        },
+        {
+          "binding": "MODELS_RATE_LIMITS",
+          "id": "2a9d403010c7489b869b10af4cbabf7f"
+        }
+      ]
+    }
+  }
+}

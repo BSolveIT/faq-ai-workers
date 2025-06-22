@@ -1,7 +1,102 @@
 // SEO Analyzer Worker - AI-Powered with Expert-Level Analysis and Enhanced Rate Limiting
-// Uses Llama 4 Scout 17B 16E Instruct for superior SEO comprehension and Position Zero analysis
+// Uses dynamic AI model configuration from WordPress admin interface
 
 import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
+import { generateDynamicHealthResponse, trackCacheHit, trackCacheMiss } from '../../shared/health-utils.js';
+import { cacheAIModelConfig } from '../../shared/advanced-cache-manager.js';
+
+/**
+ * Get AI model name dynamically from KV store with enhanced caching
+ */
+async function getAIModel(env, workerType = 'seo_analyzer') {
+  try {
+    console.log(`[AI Model Cache] Retrieving model config for ${workerType} with enhanced caching...`);
+    
+    // Use the advanced cache manager for AI model config
+    const configData = await cacheAIModelConfig('ai_model_config', env, async () => {
+      console.log(`[AI Model Cache] Cache miss - loading fresh config from KV...`);
+      const freshConfig = await env.AI_MODEL_CONFIG?.get('ai_model_config', { type: 'json' });
+      
+      if (!freshConfig) {
+        console.log(`[AI Model Cache] No config found in KV, returning null for cache`);
+        return null;
+      }
+      
+      console.log(`[AI Model Cache] Loaded fresh config:`, Object.keys(freshConfig));
+      return freshConfig;
+    });
+    
+    // Extract the specific model for this worker type
+    if (configData?.ai_models?.[workerType]) {
+      console.log(`[AI Model Cache] ✅ Using cached dynamic model for ${workerType}: ${configData.ai_models[workerType]}`);
+      return configData.ai_models[workerType];
+    }
+    
+    console.log(`[AI Model Cache] No dynamic model found for ${workerType} in cached config, checking fallback`);
+  } catch (error) {
+    console.error(`[AI Model Cache] Error with cached retrieval: ${error.message}`);
+  }
+  
+  // Fallback to env.MODEL_NAME or hardcoded default
+  const fallbackModel = env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct';
+  console.log(`[AI Model Cache] ✅ Using fallback model for ${workerType}: ${fallbackModel}`);
+  return fallbackModel;
+}
+
+/**
+ * Get AI model info with source information for health endpoint
+ */
+async function getAIModelInfo(env, workerType = 'seo_analyzer') {
+  try {
+    console.log(`[AI Model Info] Retrieving model info for ${workerType}...`);
+    
+    // Use the advanced cache manager for AI model config
+    const configData = await cacheAIModelConfig('ai_model_config', env, async () => {
+      console.log(`[AI Model Info] Cache miss - loading fresh config from KV...`);
+      const freshConfig = await env.AI_MODEL_CONFIG?.get('ai_model_config', { type: 'json' });
+      
+      if (!freshConfig) {
+        console.log(`[AI Model Info] No config found in KV, returning null for cache`);
+        return null;
+      }
+      
+      console.log(`[AI Model Info] Loaded fresh config:`, Object.keys(freshConfig));
+      return freshConfig;
+    });
+    
+    // Extract the specific model for this worker type
+    if (configData?.ai_models?.[workerType]) {
+      console.log(`[AI Model Info] ✅ Using cached dynamic model for ${workerType}: ${configData.ai_models[workerType]}`);
+      return {
+        current_model: configData.ai_models[workerType],
+        model_source: 'kv_config',
+        worker_type: workerType
+      };
+    }
+    
+    console.log(`[AI Model Info] No dynamic model found for ${workerType} in cached config, checking fallback`);
+  } catch (error) {
+    console.error(`[AI Model Info] Error with cached retrieval: ${error.message}`);
+  }
+  
+  // Fallback to env.MODEL_NAME or hardcoded default
+  if (env.MODEL_NAME) {
+    console.log(`[AI Model Info] ✅ Using env fallback model for ${workerType}: ${env.MODEL_NAME}`);
+    return {
+      current_model: env.MODEL_NAME,
+      model_source: 'env_fallback',
+      worker_type: workerType
+    };
+  }
+  
+  const hardcodedDefault = '@cf/meta/llama-3.1-8b-instruct';
+  console.log(`[AI Model Info] ✅ Using hardcoded default model for ${workerType}: ${hardcodedDefault}`);
+  return {
+    current_model: hardcodedDefault,
+    model_source: 'hardcoded_default',
+    worker_type: workerType
+  };
+}
 
 export default {
   async fetch(request, env, ctx) {
@@ -17,35 +112,58 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
 
-    // Health check endpoint
+    // EMERGENCY HEALTH CHECK - with timeout protection
     if (request.method === 'GET') {
       const url = new URL(request.url);
       if (url.pathname === '/health') {
-        return new Response(JSON.stringify({
-          status: 'healthy',
-          service: 'faq-seo-analyzer-worker',
-          timestamp: new Date().toISOString(),
-          version: '1.0.0-enhanced-rate-limiting',
-          model: '@cf/meta/llama-4-scout-17b-16e-instruct',
-          features: ['seo_analysis', 'readability_scoring', 'voice_search_optimization', 'featured_snippet_analysis', 'enhanced_rate_limiting', 'ip_management'],
-          rate_limits: {
-            hourly: 10,
-            daily: 30,
-            weekly: 150,
-            monthly: 600,
-            per_request_timeout: '30s'
-          },
-          capabilities: [
-            'multi_tier_rate_limiting',
-            'ip_whitelist_blacklist',
-            'violation_tracking',
-            'progressive_penalties',
-            'geographic_restrictions'
-          ]
-        }), {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
+        try {
+          // EMERGENCY: Execute health check with timeout protection
+          const healthPromise = generateDynamicHealthResponse(
+            'faq-seo-analyzer-worker',
+            env,
+            '3.1.0-advanced-cache-optimized',
+            ['seo_analysis', 'readability_scoring', 'voice_search_optimization', 'featured_snippet_analysis', 'enhanced_rate_limiting', 'ip_management']
+          );
+          
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Health check timeout')), 400)
+          );
+          
+          const healthResponse = await Promise.race([healthPromise, timeoutPromise]);
+          
+          // Add AI model information to health response
+          const aiModelInfo = await getAIModelInfo(env, 'seo_analyzer');
+          healthResponse.current_model = aiModelInfo.current_model;
+          healthResponse.model_source = aiModelInfo.model_source;
+          healthResponse.worker_type = aiModelInfo.worker_type;
+          
+          return new Response(JSON.stringify(healthResponse), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+          
+        } catch (error) {
+          console.warn('[Health Check] EMERGENCY fallback for faq-seo-analyzer-worker:', error.message);
+          
+          // EMERGENCY: Always return HTTP 200 to prevent monitoring cascade failures
+          const emergencyResponse = {
+            worker: 'faq-seo-analyzer-worker',
+            status: 'healthy',
+            timestamp: new Date().toISOString(),
+            version: '3.1.0-advanced-cache-optimized',
+            capabilities: ['seo_analysis', 'readability_scoring', 'voice_search_optimization', 'featured_snippet_analysis', 'enhanced_rate_limiting', 'ip_management'],
+            current_model: env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct',
+            model_source: 'env_fallback',
+            worker_type: 'seo_analyzer',
+            rate_limiting: { enabled: true, enhanced: true },
+            cache_status: 'active'
+          };
+          
+          return new Response(JSON.stringify(emergencyResponse), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
       }
     }
 
@@ -278,23 +396,27 @@ Return ONLY a JSON object:
   }
 }`;
 
+      // Get dynamic AI model for this worker
+      const aiModel = await getAIModel(env, 'seo_analyzer');
+      console.log(`[AI Model] Using model: ${aiModel} for seo_analyzer worker`);
+
       // Call AI for expert analysis
-      console.log('Calling Llama 4 Scout 17B 16E for expert SEO analysis...');
+      console.log(`Calling ${aiModel} for expert SEO analysis...`);
       
-      const aiResponse = await env.AI.run('@cf/meta/llama-4-scout-17b-16e-instruct', {
+      const aiResponse = await env.AI.run(aiModel, {
         messages: [
           {
             role: 'system',
             content: `You are a Google Search Quality Rater with deep knowledge of:
 - Featured Snippets algorithm and Position Zero requirements
-- People Also Ask ranking factors  
+- People Also Ask ranking factors
 - Voice search optimization for Google Assistant and Alexa
 - E-A-T (Expertise, Authoritativeness, Trustworthiness)
 - Google's Helpful Content Update and Core Web Vitals
 - BERT and natural language understanding
 - RankBrain and semantic search
 
-Analyze FAQs as if determining their Google ranking potential. Your advanced 17B parameter model allows you to provide nuanced, specific scores that reflect real Google ranking likelihood. Be extremely specific with scores and actionable suggestions.`
+Analyze FAQs as if determining their Google ranking potential. Provide nuanced, specific scores that reflect real Google ranking likelihood. Be extremely specific with scores and actionable suggestions.`
           },
           {
             role: 'user',
@@ -302,7 +424,7 @@ Analyze FAQs as if determining their Google ranking potential. Your advanced 17B
           }
         ],
         temperature: 0.3, // Low temperature for consistent expert scoring
-        max_tokens: 1200 // Increased for detailed responses from the 17B model
+        max_tokens: 1200 // Increased for detailed responses
       });
 
       console.log('AI Response received');
@@ -354,8 +476,9 @@ Analyze FAQs as if determining their Google ranking potential. Your advanced 17B
           targetKeyword: aiAnalysis.analysis?.targetKeyword || extractMainKeyword(question),
           missingElements: aiAnalysis.analysis?.missingElements || [],
           aiPowered: true,
-          model: 'llama-4-scout-17b-16e-instruct',
-          neurons: 4,
+          model: aiModel,
+          worker_type: 'seo_analyzer',
+          dynamic_model: true,
           reasoning: aiAnalysis.reasoning || null
         },
         rate_limiting: {

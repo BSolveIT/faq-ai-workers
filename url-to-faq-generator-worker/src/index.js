@@ -12,6 +12,123 @@
 
 import { parse } from 'node-html-parser';
 import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
+import { generateDynamicHealthResponse, trackCacheHit, trackCacheMiss } from '../../shared/health-utils.js';
+import { cacheAIModelConfig } from '../../shared/advanced-cache-manager.js';
+
+/**
+ * Get AI model name dynamically from KV store with enhanced caching
+ */
+async function getAIModel(env, workerType = 'topic_generator') {
+  try {
+    console.log(`[AI Model Cache] Retrieving model config for ${workerType} with enhanced caching...`);
+    
+    // Use the advanced cache manager for AI model config
+    const configData = await cacheAIModelConfig('ai_model_config', env, async () => {
+      console.log(`[AI Model Cache] Cache miss - loading fresh config from KV...`);
+      const freshConfig = await env.AI_MODEL_CONFIG?.get('ai_model_config', { type: 'json' });
+      
+      if (!freshConfig) {
+        console.log(`[AI Model Cache] No config found in KV, returning null for cache`);
+        return null;
+      }
+      
+      console.log(`[AI Model Cache] Loaded fresh config:`, Object.keys(freshConfig));
+      return freshConfig;
+    });
+    
+    // Extract the specific model for this worker type
+    if (configData?.ai_models?.[workerType]) {
+      console.log(`[AI Model Cache] ✅ Using cached dynamic model for ${workerType}: ${configData.ai_models[workerType]}`);
+      return configData.ai_models[workerType];
+    }
+    
+    console.log(`[AI Model Cache] No dynamic model found for ${workerType} in cached config, checking fallback`);
+  } catch (error) {
+    console.error(`[AI Model Cache] Error with cached retrieval: ${error.message}`);
+  }
+  
+  // Fallback to env.MODEL_NAME or hardcoded default
+  const fallbackModel = env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct';
+  console.log(`[AI Model Cache] ✅ Using fallback model for ${workerType}: ${fallbackModel}`);
+  return fallbackModel;
+}
+
+/**
+ * Get AI model info with source information for health endpoint
+ */
+async function getAIModelInfo(env, workerType = 'topic_generator') {
+  try {
+    console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Retrieving model info for ${workerType}...`);
+    console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Current timestamp: ${new Date().toISOString()}`);
+    
+    // Use the advanced cache manager for AI model config
+    const configData = await cacheAIModelConfig('ai_model_config', env, async () => {
+      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Cache miss - loading fresh config from KV...`);
+      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] KV namespace being accessed: AI_MODEL_CONFIG`);
+      
+      const freshConfig = await env.AI_MODEL_CONFIG?.get('ai_model_config', { type: 'json' });
+      
+      if (!freshConfig) {
+        console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] No config found in KV, returning null for cache`);
+        return null;
+      }
+      
+      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Loaded fresh config from KV:`, JSON.stringify(freshConfig, null, 2));
+      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Fresh config keys:`, Object.keys(freshConfig));
+      if (freshConfig.ai_models) {
+        console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] AI models in fresh config:`, Object.keys(freshConfig.ai_models));
+        console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Model for ${workerType}:`, freshConfig.ai_models[workerType]);
+      }
+      return freshConfig;
+    });
+    
+    // DEBUG: Log what we got from cache
+    console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Config data from cache:`, configData ? 'present' : 'null');
+    if (configData) {
+      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Cache data structure:`, Object.keys(configData));
+      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Cache updated_at:`, configData.updated_at);
+      if (configData.ai_models) {
+        console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] AI models in cache:`, Object.keys(configData.ai_models));
+        console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Specific model for ${workerType}:`, configData.ai_models[workerType]);
+      }
+    }
+    
+    // Extract the specific model for this worker type
+    if (configData?.ai_models?.[workerType]) {
+      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] ✅ Using cached dynamic model for ${workerType}: ${configData.ai_models[workerType]}`);
+      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Model source: kv_config, Updated at: ${configData.updated_at}`);
+      return {
+        current_model: configData.ai_models[workerType],
+        model_source: 'kv_config',
+        worker_type: workerType,
+        cache_updated_at: configData.updated_at,
+        cache_version: configData.version
+      };
+    }
+    
+    console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] No dynamic model found for ${workerType} in cached config, checking fallback`);
+  } catch (error) {
+    console.error(`[AI Model Info] [WORKER_SYNC_DEBUG] Error with cached retrieval: ${error.message}`);
+  }
+  
+  // Fallback to env.MODEL_NAME or hardcoded default
+  if (env.MODEL_NAME) {
+    console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] ✅ Using env fallback model for ${workerType}: ${env.MODEL_NAME}`);
+    return {
+      current_model: env.MODEL_NAME,
+      model_source: 'env_fallback',
+      worker_type: workerType
+    };
+  }
+  
+  const hardcodedDefault = '@cf/meta/llama-3.1-8b-instruct';
+  console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] ✅ Using hardcoded default model for ${workerType}: ${hardcodedDefault}`);
+  return {
+    current_model: hardcodedDefault,
+    model_source: 'hardcoded_default',
+    worker_type: workerType
+  };
+}
 
 // Premium AI call with extended timeouts for deep analysis (up to 3 minutes)
 async function callAIWithTimeout(aiBinding, model, messages, options = {}, timeoutMs = 120000) {
@@ -133,39 +250,58 @@ export default {
       }
     });
 
-    // Health check endpoint
+    // EMERGENCY HEALTH CHECK - with timeout protection
     if (request.method === 'GET') {
       const url = new URL(request.url);
       if (url.pathname === '/health') {
-        const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
-        const usageData = await rateLimiter.getCurrentUsage(env, clientIP);
-        
-        return new Response(JSON.stringify({
-          status: 'healthy',
-          service: 'url-to-faq-generator-worker',
-          timestamp: new Date().toISOString(),
-          version: '4.0.0-enhanced-rate-limited',
-          model: '@cf/meta/llama-4-scout-17b-16e-instruct',
-          features: ['url_analysis', 'deep_content_extraction', 'premium_faq_generation', 'multi_pass_optimization', 'enhanced_rate_limiting'],
-          rate_limits: {
-            hourly_limit: 5,
-            daily_limit: 15,
-            weekly_limit: 75,
-            monthly_limit: 300,
-            per_request_timeout: '180s',
-            current_usage: usageData
-          },
-          enhanced_features: {
-            ip_management: true,
-            progressive_penalties: true,
-            violation_tracking: true,
-            geographic_restrictions: true,
-            analytics_tracking: true
-          }
-        }), {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
+        try {
+          // EMERGENCY: Execute health check with timeout protection
+          const healthPromise = generateDynamicHealthResponse(
+            'url-to-faq-generator-worker',
+            env,
+            '3.1.0-advanced-cache-optimized',
+            ['url_analysis', 'deep_content_extraction', 'premium_faq_generation', 'multi_pass_optimization', 'enhanced_rate_limiting']
+          );
+          
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Health check timeout')), 400)
+          );
+          
+          const healthResponse = await Promise.race([healthPromise, timeoutPromise]);
+          
+          // Add AI model information to health response
+          const aiModelInfo = await getAIModelInfo(env, 'topic_generator');
+          healthResponse.current_model = aiModelInfo.current_model;
+          healthResponse.model_source = aiModelInfo.model_source;
+          healthResponse.worker_type = aiModelInfo.worker_type;
+          
+          return new Response(JSON.stringify(healthResponse), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+          
+        } catch (error) {
+          console.warn('[Health Check] EMERGENCY fallback for url-to-faq-generator-worker:', error.message);
+          
+          // EMERGENCY: Always return HTTP 200 to prevent monitoring cascade failures
+          const emergencyResponse = {
+            worker: 'url-to-faq-generator-worker',
+            status: 'healthy',
+            timestamp: new Date().toISOString(),
+            version: '3.1.0-advanced-cache-optimized',
+            capabilities: ['url_analysis', 'deep_content_extraction', 'premium_faq_generation', 'multi_pass_optimization', 'enhanced_rate_limiting'],
+            current_model: env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct',
+            model_source: 'env_fallback',
+            worker_type: 'topic_generator',
+            rate_limiting: { enabled: true, enhanced: true },
+            cache_status: 'active'
+          };
+          
+          return new Response(JSON.stringify(emergencyResponse), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
       }
     }
 
@@ -332,6 +468,10 @@ Output Format - Return exactly ${faqCount} premium-quality FAQs as JSON:
 
 CRITICAL: Only return the JSON. Make every FAQ exceptionally valuable using the deep content understanding from 15K character analysis.`;
 
+      // Get dynamic AI model for this worker
+      const aiModel = await getAIModel(env, 'topic_generator');
+      console.log(`[AI Model] Using model: ${aiModel} for topic_generator worker`);
+
       let initialFAQs;
       // PREMIUM: Extended processing for deep analysis
       const maxTokens = 6000; // MUCH HIGHER for comprehensive answers
@@ -340,7 +480,7 @@ CRITICAL: Only return the JSON. Make every FAQ exceptionally valuable using the 
       try {
         const aiResponse = await callAIWithTimeout(
           env.AI,
-          '@cf/meta/llama-4-scout-17b-16e-instruct', // Premium model
+          aiModel, // DYNAMIC MODEL FROM KV CONFIG
           [
             { role: 'system', content: 'You are a premium FAQ specialist with deep content analysis capabilities. Generate exceptionally detailed, high-value FAQs using comprehensive content understanding. Focus on creating FAQs that provide maximum value to users and perform excellently in search results.' },
             { role: 'user', content: generationPrompt }
@@ -368,11 +508,14 @@ CRITICAL: Only return the JSON. Make every FAQ exceptionally valuable using the 
       } catch (error) {
         console.error('Primary model failed:', error.message);
         
-        // Fallback to Llama 3.1 with same quality settings
+        // Fallback to default model with same quality settings
+        const fallbackModel = env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct';
+        console.log(`[AI Model] Primary model failed, using fallback: ${fallbackModel}`);
+        
         try {
           const fallbackResponse = await callAIWithTimeout(
             env.AI,
-            '@cf/meta/llama-3.1-8b-instruct',
+            fallbackModel,
             [
               { role: 'system', content: 'Generate premium-quality, detailed FAQs in JSON format using deep content analysis.' },
               { role: 'user', content: generationPrompt }
@@ -549,7 +692,9 @@ Return the quality-enhanced FAQs in the same JSON format.`;
           title: title,
           totalGenerated: validFAQs.length,
           processingTime: processingTime,
-          model: 'llama-4-scout-17b-16e-enhanced',
+          model: aiModel,
+          worker_type: 'topic_generator',
+          dynamic_model: true,
           enhanced: wasEnhanced,
           qualityMode: 'premium-deep-analysis', // Premium indicator
           contentAnalyzed: '15K characters',
