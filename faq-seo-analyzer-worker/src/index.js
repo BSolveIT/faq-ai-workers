@@ -155,8 +155,7 @@ export default {
           current_model: env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct',
           model_source: 'env_fallback',
           worker_type: 'seo_analyzer',
-          rate_limiting: { enabled: true, enhanced: true },
-          cache_status: 'active'
+          rate_limiting: { enabled: true, enhanced: true }
         };
         
         return new Response(JSON.stringify(emergencyResponse), {

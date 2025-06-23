@@ -96,10 +96,10 @@ export async function generateDynamicHealthResponse(workerName, env, version, st
     console.log(`[Health Diagnostic] Circuit breaker check result: shouldUseLightweight = ${shouldUseLightweight}`);
     
     if (shouldUseLightweight) {
-      console.log(`[Health Diagnostic] ⚡ LIGHTWEIGHT MODE TRIGGERED for ${workerName} due to circuit breaker`);
+      console.log(`[Health Diagnostic] ⚡ EMERGENCY LIGHTWEIGHT MODE TRIGGERED for ${workerName} due to circuit breaker`);
       console.log(`[Health Diagnostic] ⚡ This bypasses full health checks and may cause status discrepancies`);
-      const lightweightResponse = generateLightweightHealthResponse(workerName, version, staticFeatures, startTime);
-      console.log(`[Health Diagnostic] ⚡ Lightweight response status: ${lightweightResponse.status}`);
+      const lightweightResponse = generateLightweightHealthResponse(workerName, version, staticFeatures, startTime, true);
+      console.log(`[Health Diagnostic] ⚡ Emergency lightweight response status: ${lightweightResponse.status}`);
       return lightweightResponse;
     }
     
@@ -118,11 +118,11 @@ export async function generateDynamicHealthResponse(workerName, env, version, st
       await recordHealthCheckSuccess(workerName, env);
       return healthResponse;
     } catch (timeoutError) {
-      console.warn(`[Health Diagnostic] ⏰ TIMEOUT OCCURRED for ${workerName}, falling back to lightweight`);
+      console.warn(`[Health Diagnostic] ⏰ TIMEOUT OCCURRED for ${workerName}, falling back to emergency lightweight`);
       console.log(`[Health Diagnostic] ⏰ This timeout fallback may create health indicator inconsistencies`);
       await recordHealthCheckFailure(workerName, env, 'timeout');
-      const fallbackResponse = generateLightweightHealthResponse(workerName, version, staticFeatures, startTime);
-      console.log(`[Health Diagnostic] ⏰ Timeout fallback response status: ${fallbackResponse.status}`);
+      const fallbackResponse = generateLightweightHealthResponse(workerName, version, staticFeatures, startTime, true);
+      console.log(`[Health Diagnostic] ⏰ Timeout emergency fallback response status: ${fallbackResponse.status}`);
       return fallbackResponse;
     }
     
@@ -130,8 +130,8 @@ export async function generateDynamicHealthResponse(workerName, env, version, st
     console.error(`[Health Diagnostic] 💥 CRITICAL ERROR in health check for ${workerName}:`, error);
     console.log(`[Health Diagnostic] 💥 Error fallback may create inconsistent health reporting`);
     await recordHealthCheckFailure(workerName, env, error.message);
-    const errorResponse = generateLightweightHealthResponse(workerName, version, staticFeatures, startTime);
-    console.log(`[Health Diagnostic] 💥 Error fallback response status: ${errorResponse.status}`);
+    const errorResponse = generateLightweightHealthResponse(workerName, version, staticFeatures, startTime, true);
+    console.log(`[Health Diagnostic] 💥 Critical error emergency fallback response status: ${errorResponse.status}`);
     return errorResponse;
   }
 }
@@ -139,14 +139,17 @@ export async function generateDynamicHealthResponse(workerName, env, version, st
 /**
  * EMERGENCY: Lightweight health response without KV operations (FIXED)
  */
-function generateLightweightHealthResponse(workerName, version, staticFeatures, startTime) {
+function generateLightweightHealthResponse(workerName, version, staticFeatures, startTime, isEmergency = false) {
   const timestamp = new Date().toISOString();
   const duration = Date.now() - startTime;
   
   // FIXED: Use consistent status logic for lightweight mode
-  const lightweightStatus = 'operational'; // Operational when in lightweight emergency mode
+  const lightweightStatus = 'operational'; // Operational when in lightweight mode
   
-  console.log(`[Health Diagnostic] 🔧 LIGHTWEIGHT RESPONSE: Status set to '${lightweightStatus}' (consistent internal/external)`);
+  // FIXED: Determine correct performance mode based on actual emergency state
+  const performanceMode = isEmergency ? 'emergency_lightweight' : 'lightweight';
+  
+  console.log(`[Health Diagnostic] 🔧 LIGHTWEIGHT RESPONSE: Status set to '${lightweightStatus}' | Performance mode: '${performanceMode}' | Emergency: ${isEmergency}`);
   
   return {
     status: lightweightStatus,
@@ -166,10 +169,10 @@ function generateLightweightHealthResponse(workerName, version, staticFeatures, 
     // Static features only
     features: staticFeatures,
     
-    // Minimal performance info
+    // FIXED: Minimal performance info with correct mode
     performance: {
       response_time_ms: duration,
-      mode: 'emergency_lightweight'
+      mode: performanceMode
     },
     
     // FIXED: Consistent health indicators
@@ -309,7 +312,10 @@ async function generateFullHealthResponse(workerName, env, version, staticFeatur
       health_indicators: {
         overall_system_health: internalHealthStatus, // This can be different from external status
         ai_health: env.AI ? 'available' : 'unavailable'
-      }
+      },
+      
+      // Cache status - consistent across all workers
+      cache_status: 'active'
     };
     
   } catch (error) {
@@ -318,16 +324,22 @@ async function generateFullHealthResponse(workerName, env, version, staticFeatur
 }
 
 /**
- * EMERGENCY: Circuit breaker logic to prevent cascade failures
+ * Circuit breaker logic to prevent cascade failures (FIXED: Less aggressive)
  */
 async function shouldUseLightweightMode(workerName, env) {
   console.log(`[Health Diagnostic] 🔧 Checking circuit breaker for ${workerName}`);
   
   try {
+    // Check if FAQ_CACHE binding is available
+    if (!env.FAQ_CACHE) {
+      console.log(`[Health Diagnostic] 🔧 No FAQ_CACHE binding available for ${workerName} - allowing full health check`);
+      return false;
+    }
+    
     const circuitKey = `circuit_breaker:${workerName}`;
     console.log(`[Health Diagnostic] 🔧 Looking for circuit breaker data with key: ${circuitKey}`);
     
-    const circuitData = await env.FAQ_CACHE?.get(circuitKey, { type: 'json' });
+    const circuitData = await env.FAQ_CACHE.get(circuitKey, { type: 'json' });
     
     if (!circuitData) {
       console.log(`[Health Diagnostic] 🔧 No circuit breaker data found for ${workerName} - allowing full health check`);
@@ -342,8 +354,8 @@ async function shouldUseLightweightMode(workerName, env) {
     console.log(`[Health Diagnostic] 🔧 - Last failure: ${new Date(lastFailure).toISOString()}`);
     console.log(`[Health Diagnostic] 🔧 - Time since last failure: ${(now - lastFailure) / 1000}s`);
     
-    // If too many consecutive failures in last 5 minutes, use lightweight mode
-    if (consecutiveFailures >= 3 && (now - lastFailure) < 300000) {
+    // Only trigger circuit breaker for SEVERE failures (5+ consecutive failures in last 2 minutes)
+    if (consecutiveFailures >= 5 && (now - lastFailure) < 120000) {
       console.log(`[Health Diagnostic] 🔧 ⚡ CIRCUIT BREAKER TRIGGERED for ${workerName} (${consecutiveFailures} failures)`);
       console.log(`[Health Diagnostic] 🔧 ⚡ This forces lightweight mode and causes health status discrepancies`);
       return true;
@@ -352,10 +364,10 @@ async function shouldUseLightweightMode(workerName, env) {
     console.log(`[Health Diagnostic] 🔧 Circuit breaker conditions NOT met for ${workerName} - allowing full health check`);
     return false;
   } catch (error) {
-    // If we can't check circuit breaker, assume lightweight mode for safety
-    console.warn(`[Health Diagnostic] 🔧 ❌ ERROR checking circuit breaker for ${workerName}:`, error.message);
-    console.log(`[Health Diagnostic] 🔧 ❌ Defaulting to lightweight mode for safety - this may cause status discrepancies`);
-    return true;
+    // FIXED: Don't default to emergency mode on minor errors
+    console.warn(`[Health Diagnostic] 🔧 ⚠️ Error checking circuit breaker for ${workerName}:`, error.message);
+    console.log(`[Health Diagnostic] 🔧 ✅ Allowing full health check despite circuit breaker error`);
+    return false; // ← FIXED: Allow full health check instead of defaulting to emergency
   }
 }
 
