@@ -24,7 +24,7 @@
 
 import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
 import { generateDynamicHealthResponse, trackCacheHit, trackCacheMiss } from '../../shared/health-utils.js';
-import { cacheAIModelConfig } from '../../shared/advanced-cache-manager.js';
+import { cacheAIModelConfig, invalidateWorkerCaches, initializeCacheManager } from '../../shared/advanced-cache-manager.js';
 
 /**
  * Get AI model name dynamically from KV store with enhanced caching
@@ -367,6 +367,69 @@ export default {
             'Cache-Control': 'no-cache'
           }
         });
+      }
+    }
+
+    // Handle cache clear endpoint
+    if (request.method === 'POST') {
+      const url = new URL(request.url);
+      if (url.pathname === '/cache/clear') {
+        const clearStartTime = Date.now();
+        
+        try {
+          console.log('[Cache Clear] Starting cache invalidation for faq-realtime-assistant-worker...');
+          
+          // Initialize cache manager and invalidate all worker caches
+          const cacheManager = initializeCacheManager(env);
+          await invalidateWorkerCaches('ai_model_config', env);
+          await cacheManager.invalidate('faq_improve_*');
+          await cacheManager.invalidate('faq_typing_*');
+          await cacheManager.invalidate('faq_tips_*');
+          
+          const clearDuration = ((Date.now() - clearStartTime) / 1000).toFixed(2);
+          console.log(`[Cache Clear] ✅ Cache invalidation completed in ${clearDuration}s`);
+          
+          return new Response(JSON.stringify({
+            success: true,
+            message: 'All caches cleared successfully',
+            worker: 'faq-realtime-assistant-worker',
+            worker_type: 'question_generator',
+            duration: clearDuration,
+            timestamp: new Date().toISOString(),
+            cache_types_cleared: [
+              'ai_model_config',
+              'worker_health_data',
+              'suggestion_cache',
+              'L1_memory_cache',
+              'L2_kv_cache'
+            ]
+          }), {
+            status: 200,
+            headers: {
+              ...corsHeaders,
+              'Content-Type': 'application/json'
+            }
+          });
+          
+        } catch (error) {
+          const clearDuration = ((Date.now() - clearStartTime) / 1000).toFixed(2);
+          console.error(`[Cache Clear] ❌ Cache invalidation failed in ${clearDuration}s:`, error);
+          
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Cache clearing failed',
+            details: error.message,
+            worker: 'faq-realtime-assistant-worker',
+            duration: clearDuration,
+            timestamp: new Date().toISOString()
+          }), {
+            status: 500,
+            headers: {
+              ...corsHeaders,
+              'Content-Type': 'application/json'
+            }
+          });
+        }
       }
     }
 

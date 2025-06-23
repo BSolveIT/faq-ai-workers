@@ -7,7 +7,7 @@ const { htmlToText } = require('html-to-text');
 const { parse: parseHTML } = require('node-html-parser');
 import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
 import { generateDynamicHealthResponse, trackCacheHit, trackCacheMiss } from '../../shared/health-utils.js';
-import { cacheAIModelConfig } from '../../shared/advanced-cache-manager.js';
+import { cacheAIModelConfig, invalidateWorkerCaches, initializeCacheManager } from '../../shared/advanced-cache-manager.js';
 
 /**
  * Get AI model name dynamically from KV store with enhanced caching
@@ -126,58 +126,114 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
 
+    const url = new URL(request.url);
+
     // EMERGENCY HEALTH CHECK - with timeout protection
-    if (request.method === 'GET') {
-      const url = new URL(request.url);
-      if (url.pathname === '/health') {
-        try {
-          // EMERGENCY: Execute health check with timeout protection
-          const healthPromise = generateDynamicHealthResponse(
-            'faq-enhancement-worker',
-            env,
-            '3.1.0-advanced-cache-optimized',
-            ['question_enhancement', 'answer_optimization', 'seo_analysis', 'quality_scoring', 'enhanced_rate_limiting', 'ip_management']
-          );
-          
-          const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Health check timeout')), 400)
-          );
-          
-          const healthResponse = await Promise.race([healthPromise, timeoutPromise]);
-          
-          // Add AI model information to health response
-          const aiModelInfo = await getAIModelInfo(env, 'faq_enhancer');
-          healthResponse.current_model = aiModelInfo.current_model;
-          healthResponse.model_source = aiModelInfo.model_source;
-          healthResponse.worker_type = aiModelInfo.worker_type;
-          
-          return new Response(JSON.stringify(healthResponse), {
-            status: 200,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          });
-          
-        } catch (error) {
-          console.warn('[Health Check] EMERGENCY fallback for faq-enhancement-worker:', error.message);
-          
-          // EMERGENCY: Always return HTTP 200 to prevent monitoring cascade failures
-          const emergencyResponse = {
-            worker: 'faq-enhancement-worker',
-            status: 'healthy',
-            timestamp: new Date().toISOString(),
-            version: '3.1.0-advanced-cache-optimized',
-            capabilities: ['question_enhancement', 'answer_optimization', 'seo_analysis', 'quality_scoring', 'enhanced_rate_limiting', 'ip_management'],
-            current_model: env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct',
-            model_source: 'env_fallback',
-            worker_type: 'faq_enhancer',
-            rate_limiting: { enabled: true, enhanced: true },
-            cache_status: 'active'
-          };
-          
-          return new Response(JSON.stringify(emergencyResponse), {
-            status: 200,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          });
-        }
+    if (request.method === 'GET' && url.pathname === '/health') {
+      try {
+        // EMERGENCY: Execute health check with timeout protection
+        const healthPromise = generateDynamicHealthResponse(
+          'faq-enhancement-worker',
+          env,
+          '3.1.0-advanced-cache-optimized',
+          ['question_enhancement', 'answer_optimization', 'seo_analysis', 'quality_scoring', 'enhanced_rate_limiting', 'ip_management']
+        );
+        
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Health check timeout')), 400)
+        );
+        
+        const healthResponse = await Promise.race([healthPromise, timeoutPromise]);
+        
+        // Add AI model information to health response
+        const aiModelInfo = await getAIModelInfo(env, 'faq_enhancer');
+        healthResponse.current_model = aiModelInfo.current_model;
+        healthResponse.model_source = aiModelInfo.model_source;
+        healthResponse.worker_type = aiModelInfo.worker_type;
+        
+        return new Response(JSON.stringify(healthResponse), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+        
+      } catch (error) {
+        console.warn('[Health Check] EMERGENCY fallback for faq-enhancement-worker:', error.message);
+        
+        // EMERGENCY: Always return HTTP 200 to prevent monitoring cascade failures
+        const emergencyResponse = {
+          worker: 'faq-enhancement-worker',
+          status: 'healthy',
+          timestamp: new Date().toISOString(),
+          version: '3.1.0-advanced-cache-optimized',
+          capabilities: ['question_enhancement', 'answer_optimization', 'seo_analysis', 'quality_scoring', 'enhanced_rate_limiting', 'ip_management'],
+          current_model: env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct',
+          model_source: 'env_fallback',
+          worker_type: 'faq_enhancer',
+          rate_limiting: { enabled: true, enhanced: true },
+          cache_status: 'active'
+        };
+        
+        return new Response(JSON.stringify(emergencyResponse), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+    
+    // Handle cache clearing endpoint (both GET and POST)
+    if (url.pathname === '/cache/clear') {
+      try {
+        console.log('[Cache Clear] Enhancement worker cache clearing initiated...');
+        
+        // Initialize cache manager for enhancement worker
+        await initializeCacheManager('enhancement', env);
+        
+        // Clear comprehensive cache types with enhancement-specific patterns
+        const cacheResult = await invalidateWorkerCaches('enhancement', env, {
+          ai_model_config: true,
+          worker_health: true,
+          suggestion_cache: true,
+          l1_cache: true,
+          l2_cache: true,
+          patterns: [
+            'enhancement_*',
+            'faq_enhancement_*',
+            'ai_model_*',
+            'page_context_*',
+            'question_variations_*',
+            'seo_analysis_*',
+            'quality_scores_*'
+          ]
+        });
+        
+        console.log('[Cache Clear] Enhancement worker cache clearing completed:', cacheResult);
+        
+        return new Response(JSON.stringify({
+          success: true,
+          message: 'Enhancement worker caches cleared successfully',
+          worker: 'faq-enhancement-worker',
+          timestamp: new Date().toISOString(),
+          patterns_cleared: cacheResult?.patterns_cleared || [],
+          total_keys_cleared: cacheResult?.total_cleared || 0,
+          clear_results: cacheResult || {}
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+        
+      } catch (error) {
+        console.error('[Cache Clear] Enhancement worker cache clearing failed:', error);
+        
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Cache clearing failed',
+          message: error.message,
+          worker: 'faq-enhancement-worker',
+          timestamp: new Date().toISOString()
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
       }
     }
 

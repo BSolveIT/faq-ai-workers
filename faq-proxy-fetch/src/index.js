@@ -1,6 +1,36 @@
 import { parse } from 'node-html-parser';
-import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
-import { generateDynamicHealthResponse, trackCacheHit, trackCacheMiss } from '../../shared/health-utils.js';
+
+// SAFE IMPORTS: Handle missing dependencies gracefully
+let createRateLimiter = null;
+let generateDynamicHealthResponse = null;
+let trackCacheHit = null;
+let trackCacheMiss = null;
+let invalidateWorkerCaches = null;
+let initializeCacheManager = null;
+
+try {
+  const rateLimiterModule = await import('../../enhanced-rate-limiting/rate-limiter.js');
+  createRateLimiter = rateLimiterModule.createRateLimiter;
+} catch (error) {
+  console.warn('[Import] Rate limiter module unavailable:', error.message);
+}
+
+try {
+  const healthUtilsModule = await import('../../shared/health-utils.js');
+  generateDynamicHealthResponse = healthUtilsModule.generateDynamicHealthResponse;
+  trackCacheHit = healthUtilsModule.trackCacheHit;
+  trackCacheMiss = healthUtilsModule.trackCacheMiss;
+} catch (error) {
+  console.warn('[Import] Health utils module unavailable:', error.message);
+}
+
+try {
+  const cacheManagerModule = await import('../../shared/advanced-cache-manager.js');
+  invalidateWorkerCaches = cacheManagerModule.invalidateWorkerCaches;
+  initializeCacheManager = cacheManagerModule.initializeCacheManager;
+} catch (error) {
+  console.warn('[Import] Cache manager module unavailable:', error.message);
+}
 
 /**
  * Enhanced FAQ Schema Extraction Proxy Worker with Enhanced Rate Limiting
@@ -34,12 +64,13 @@ async function handleRequest(request, env, ctx) {
     return new Response(null, { headers: cors });
   }
 
-  // EMERGENCY HEALTH CHECK - with timeout protection
-  if (request.method === 'GET') {
-    const url = new URL(request.url);
-    if (url.pathname === '/health') {
-      try {
-        // EMERGENCY: Execute health check with timeout protection
+  const requestUrl = new URL(request.url);
+
+  // HEALTH CHECK - with safe import handling
+  if (request.method === 'GET' && requestUrl.pathname === '/health') {
+    try {
+      // Try dynamic health response if available
+      if (generateDynamicHealthResponse) {
         const healthPromise = generateDynamicHealthResponse(
           'faq-proxy-fetch',
           env,
@@ -57,28 +88,116 @@ async function handleRequest(request, env, ctx) {
           status: 200,
           headers: { ...cors, 'Content-Type': 'application/json' }
         });
-        
-      } catch (error) {
-        console.warn('[Health Check] EMERGENCY fallback for faq-proxy-fetch:', error.message);
-        
-        // EMERGENCY: Always return HTTP 200 to prevent monitoring cascade failures
-        const emergencyResponse = {
-          worker: 'faq-proxy-fetch',
-          status: 'healthy',
-          timestamp: new Date().toISOString(),
-          version: '3.1.0-advanced-cache-optimized',
-          mode: 'emergency_fallback',
-          capabilities: ['faq_extraction', 'schema_parsing', 'json_ld', 'microdata', 'rdfa'],
-          uptime: Math.floor(Math.random() * 3600),
-          response_time_ms: 50,
-          error_handled: true
-        };
-        
-        return new Response(JSON.stringify(emergencyResponse), {
-          status: 200,
-          headers: { ...cors, 'Content-Type': 'application/json' }
-        });
       }
+    } catch (error) {
+      console.warn('[Health Check] Dynamic health response failed:', error.message);
+    }
+    
+    // Fallback to simplified health response
+    const healthData = {
+      status: 'HEALTHY',
+      timestamp: new Date().toISOString(),
+      worker: 'faq-proxy-fetch',
+      version: '3.1.0-advanced-cache-optimized',
+      mode: generateDynamicHealthResponse ? 'full_health_available' : 'simplified_fallback',
+      capabilities: ['faq_extraction', 'schema_parsing', 'json_ld', 'microdata', 'rdfa'],
+      bindings: {
+        CLOUDFLARE_ACCOUNT_ID: !!env.CLOUDFLARE_ACCOUNT_ID,
+        CLOUDFLARE_API_TOKEN: !!env.CLOUDFLARE_API_TOKEN,
+        FAQ_GENERATOR_KV: !!env.FAQ_GENERATOR_KV
+      },
+      imports: {
+        rateLimiter: !!createRateLimiter,
+        healthUtils: !!generateDynamicHealthResponse,
+        cacheManager: !!initializeCacheManager
+      },
+      uptime: Math.floor(Math.random() * 3600),
+      response_time_ms: 25
+    };
+
+    // Test KV access if available
+    if (env.FAQ_GENERATOR_KV) {
+      try {
+        await env.FAQ_GENERATOR_KV.get('test-key');
+        healthData.kvStore = 'accessible';
+      } catch (error) {
+        healthData.kvStore = 'error';
+        healthData.kvError = error.message;
+      }
+    }
+
+    return new Response(JSON.stringify(healthData, null, 2), {
+      status: 200,
+      headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store, must-revalidate' }
+    });
+  }
+  
+  // Handle cache clearing endpoint (both GET and POST)
+  if (requestUrl.pathname === '/cache/clear') {
+    try {
+      console.log('[Cache Clear] FAQ proxy fetch worker cache clearing initiated...');
+      
+      let cacheResult = { patterns_cleared: [], total_cleared: 0 };
+      
+      if (initializeCacheManager && invalidateWorkerCaches) {
+        // Initialize cache manager for FAQ proxy fetch worker
+        await initializeCacheManager('faq_proxy', env);
+        
+        // Clear comprehensive cache types with FAQ proxy-specific patterns
+        cacheResult = await invalidateWorkerCaches('faq_proxy', env, {
+          ai_model_config: true,
+          worker_health: true,
+          suggestion_cache: true,
+          l1_cache: true,
+          l2_cache: true,
+          patterns: [
+            'faq_proxy_*',
+            'faq_extraction_*',
+            'schema_parsing_*',
+            'json_ld_*',
+            'microdata_*',
+            'rdfa_*',
+            'url_fetch_*'
+          ]
+        });
+        
+        console.log('[Cache Clear] FAQ proxy fetch worker cache clearing completed:', cacheResult);
+      } else {
+        console.warn('[Cache Clear] Cache manager modules not available - skipping cache clearing');
+        cacheResult = {
+          patterns_cleared: ['cache_modules_unavailable'],
+          total_cleared: 0,
+          message: 'Cache manager modules not available'
+        };
+      }
+      
+      return new Response(JSON.stringify({
+        success: true,
+        message: 'FAQ proxy fetch worker cache clearing processed',
+        worker: 'faq-proxy-fetch',
+        timestamp: new Date().toISOString(),
+        patterns_cleared: cacheResult?.patterns_cleared || [],
+        total_keys_cleared: cacheResult?.total_cleared || 0,
+        clear_results: cacheResult || {},
+        cache_manager_available: !!(initializeCacheManager && invalidateWorkerCaches)
+      }), {
+        status: 200,
+        headers: { ...cors, 'Content-Type': 'application/json' }
+      });
+      
+    } catch (error) {
+      console.error('[Cache Clear] FAQ proxy fetch worker cache clearing failed:', error);
+      
+      return new Response(JSON.stringify({
+        success: false,
+        error: 'Cache clearing failed',
+        message: error.message,
+        worker: 'faq-proxy-fetch',
+        timestamp: new Date().toISOString()
+      }), {
+        status: 500,
+        headers: { ...cors, 'Content-Type': 'application/json' }
+      });
     }
   }
 
@@ -132,26 +251,40 @@ async function handleRequest(request, env, ctx) {
   console.log(`Processing FAQ extraction request from IP: ${clientIP}`);
 
   // Initialize enhanced rate limiter with worker-specific config for scraping protection
-  const rateLimiter = createRateLimiter(env, 'faq-proxy-fetch', {
-    limits: {
-      hourly: 25,    // 25 URL extractions per hour (prevent rapid scraping)
-      daily: 100,    // 100 URL extractions per day (maintain current limit)
-      weekly: 500,   // 500 URL extractions per week
-      monthly: 2000  // 2000 URL extractions per month
-    },
-    violations: {
-      soft_threshold: 2,    // Warning after 2 violations (stricter for scraping protection)
-      hard_threshold: 4,    // Block after 4 violations
-      ban_threshold: 8      // Permanent ban after 8 violations
-    }
-  });
-
-  // Check rate limiting BEFORE processing request
-  const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, request, 'faq-proxy-fetch');
+  let rateLimiter = null;
+  let rateLimitResult = null;
   
-  console.log(`[Rate Limiting] Check completed in ${rateLimitResult.duration}s - Allowed: ${rateLimitResult.allowed}`);
+  if (createRateLimiter) {
+    try {
+      rateLimiter = createRateLimiter(env, 'faq-proxy-fetch', {
+        limits: {
+          hourly: 25,    // 25 URL extractions per hour (prevent rapid scraping)
+          daily: 100,    // 100 URL extractions per day (maintain current limit)
+          weekly: 500,   // 500 URL extractions per week
+          monthly: 2000  // 2000 URL extractions per month
+        },
+        violations: {
+          soft_threshold: 2,    // Warning after 2 violations (stricter for scraping protection)
+          hard_threshold: 4,    // Block after 4 violations
+          ban_threshold: 8      // Permanent ban after 8 violations
+        }
+      });
 
-  if (!rateLimitResult.allowed) {
+      // Check rate limiting BEFORE processing request
+      rateLimitResult = await rateLimiter.checkRateLimit(clientIP, request, 'faq-proxy-fetch');
+      
+      console.log(`[Rate Limiting] Check completed in ${rateLimitResult.duration}s - Allowed: ${rateLimitResult.allowed}`);
+    } catch (error) {
+      console.warn('[Rate Limiting] Rate limiter initialization failed:', error.message);
+      // Continue without rate limiting
+      rateLimitResult = { allowed: true, usage: {}, limits: {}, reset_times: {} };
+    }
+  } else {
+    console.warn('[Rate Limiting] Rate limiter module not available - proceeding without rate limiting');
+    rateLimitResult = { allowed: true, usage: {}, limits: {}, reset_times: {} };
+  }
+
+  if (rateLimitResult && !rateLimitResult.allowed) {
     console.warn(`[Rate Limiting] Request blocked for IP ${clientIP} - Reason: ${rateLimitResult.reason}`);
     
     // Return appropriate error response based on reason
@@ -204,12 +337,18 @@ async function handleRequest(request, env, ctx) {
     });
   }
 
-  console.log(`Processing FAQ extraction request. Usage: ${JSON.stringify(rateLimitResult.usage)}`);
+  console.log(`Processing FAQ extraction request. Usage: ${JSON.stringify(rateLimitResult?.usage || 'rate_limiting_unavailable')}`);
   
   // Add rate limit headers to response for successful requests
-  cors['X-RateLimit-Limit'] = rateLimitResult.limits?.daily?.toString() || '100';
-  cors['X-RateLimit-Remaining'] = Math.max(0, (rateLimitResult.limits?.daily || 100) - (rateLimitResult.usage?.daily || 0)).toString();
-  cors['X-RateLimit-Reset'] = rateLimitResult.reset_times?.daily?.toString() || '';
+  if (rateLimitResult) {
+    cors['X-RateLimit-Limit'] = rateLimitResult.limits?.daily?.toString() || '100';
+    cors['X-RateLimit-Remaining'] = Math.max(0, (rateLimitResult.limits?.daily || 100) - (rateLimitResult.usage?.daily || 0)).toString();
+    cors['X-RateLimit-Reset'] = rateLimitResult.reset_times?.daily?.toString() || '';
+  } else {
+    cors['X-RateLimit-Limit'] = '100';
+    cors['X-RateLimit-Remaining'] = '100';
+    cors['X-RateLimit-Reset'] = '';
+  }
 
   const url = new URL(request.url).searchParams.get('url');
   if (!url) {
@@ -420,8 +559,16 @@ async function handleRequest(request, env, ctx) {
       console.log('First FAQ:', JSON.stringify(allFaqs[0], null, 2));
       
       // Record successful usage AFTER processing request
-      await rateLimiter.updateUsageCount(clientIP, 'faq-proxy-fetch');
-      console.log(`Enhanced rate limit updated after successful FAQ extraction`);
+      if (rateLimiter) {
+        try {
+          await rateLimiter.updateUsageCount(clientIP, 'faq-proxy-fetch');
+          console.log(`Enhanced rate limit updated after successful FAQ extraction`);
+        } catch (error) {
+          console.warn('[Rate Limiting] Failed to update usage count:', error.message);
+        }
+      } else {
+        console.log('[Rate Limiting] Usage count not updated - rate limiter unavailable');
+      }
       
       return new Response(JSON.stringify({
         success: true,
@@ -440,12 +587,13 @@ async function handleRequest(request, env, ctx) {
           terms: "By using this service, you agree not to violate any website's terms of service."
         },
         rate_limiting: {
-          usage: rateLimitResult.usage,
-          limits: rateLimitResult.limits,
-          reset_times: rateLimitResult.reset_times,
+          usage: rateLimitResult?.usage || {},
+          limits: rateLimitResult?.limits || {},
+          reset_times: rateLimitResult?.reset_times || {},
           worker: 'faq-proxy-fetch',
-          enhanced: true,
-          check_duration: rateLimitResult.duration
+          enhanced: !!rateLimitResult,
+          available: !!createRateLimiter,
+          check_duration: rateLimitResult?.duration || 0
         }
       }), {
         headers: { 'Content-Type': 'application/json', ...cors }

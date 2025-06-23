@@ -23,7 +23,7 @@
 
 import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
 import { generateDynamicHealthResponse, trackCacheHit, trackCacheMiss } from '../../shared/health-utils.js';
-import { cacheAIModelConfig } from '../../shared/advanced-cache-manager.js';
+import { cacheAIModelConfig, invalidateWorkerCaches, initializeCacheManager } from '../../shared/advanced-cache-manager.js';
 
 /**
  * Get AI model name dynamically from KV store with enhanced caching
@@ -338,9 +338,92 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
 
+    const url = new URL(request.url);
+
+    // Handle cache clearing endpoint (both GET and POST)
+    if (url.pathname === '/cache/clear') {
+      try {
+        console.log('[Cache Clear] Starting comprehensive cache clearing for answer generator worker...');
+        const clearStartTime = Date.now();
+        
+        // Initialize cache manager for this worker type
+        await initializeCacheManager('answer_generator', env);
+        
+        // Clear all worker-specific caches
+        const clearResults = await invalidateWorkerCaches('answer_generator', env, {
+          // Clear AI model configuration cache
+          ai_model_config: true,
+          // Clear worker health data cache
+          worker_health: true,
+          // Clear suggestion cache (answer-specific caches)
+          suggestion_cache: true,
+          // Clear L1 and L2 caches
+          l1_cache: true,
+          l2_cache: true,
+          // Worker-specific patterns
+          patterns: [
+            'faq_answer_*',
+            'answer_generation_*',
+            'answer_improvement_*',
+            'answer_validation_*',
+            'answer_expansion_*',
+            'answer_examples_*',
+            'answer_tone_*'
+          ]
+        });
+        
+        const clearDuration = ((Date.now() - clearStartTime) / 1000).toFixed(2);
+        
+        console.log(`[Cache Clear] Answer generator cache clearing completed in ${clearDuration}s`);
+        console.log(`[Cache Clear] Clear results:`, clearResults);
+        
+        return new Response(JSON.stringify({
+          success: true,
+          message: 'Answer generator worker caches cleared successfully',
+          worker_type: 'answer_generator',
+          worker_name: 'faq-answer-generator-worker',
+          cleared_at: new Date().toISOString(),
+          duration_seconds: parseFloat(clearDuration),
+          cache_types_cleared: [
+            'ai_model_config',
+            'worker_health',
+            'suggestion_cache',
+            'l1_cache',
+            'l2_cache'
+          ],
+          patterns_cleared: clearResults?.patterns_cleared || [],
+          total_keys_cleared: clearResults?.total_cleared || 0,
+          clear_results: clearResults || {}
+        }), {
+          status: 200,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache'
+          }
+        });
+        
+      } catch (error) {
+        console.error('[Cache Clear] Error clearing answer generator caches:', error);
+        
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Cache clearing failed',
+          details: error.message,
+          worker_type: 'answer_generator',
+          worker_name: 'faq-answer-generator-worker'
+        }), {
+          status: 500,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json'
+          }
+        });
+      }
+    }
+
     // Handle health check endpoint
     if (request.method === 'GET') {
-      const url = new URL(request.url);
       if (url.pathname === '/health') {
         const healthResponse = await generateDynamicHealthResponse(
           'faq-answer-generator-worker',

@@ -13,7 +13,7 @@
 import { parse } from 'node-html-parser';
 import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
 import { generateDynamicHealthResponse, trackCacheHit, trackCacheMiss } from '../../shared/health-utils.js';
-import { cacheAIModelConfig } from '../../shared/advanced-cache-manager.js';
+import { cacheAIModelConfig, invalidateWorkerCaches, initializeCacheManager } from '../../shared/advanced-cache-manager.js';
 
 /**
  * Get AI model name dynamically from KV store with enhanced caching
@@ -250,58 +250,114 @@ export default {
       }
     });
 
+    const url = new URL(request.url);
+
     // EMERGENCY HEALTH CHECK - with timeout protection
-    if (request.method === 'GET') {
-      const url = new URL(request.url);
-      if (url.pathname === '/health') {
-        try {
-          // EMERGENCY: Execute health check with timeout protection
-          const healthPromise = generateDynamicHealthResponse(
-            'url-to-faq-generator-worker',
-            env,
-            '3.1.0-advanced-cache-optimized',
-            ['url_analysis', 'deep_content_extraction', 'premium_faq_generation', 'multi_pass_optimization', 'enhanced_rate_limiting']
-          );
-          
-          const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Health check timeout')), 400)
-          );
-          
-          const healthResponse = await Promise.race([healthPromise, timeoutPromise]);
-          
-          // Add AI model information to health response
-          const aiModelInfo = await getAIModelInfo(env, 'topic_generator');
-          healthResponse.current_model = aiModelInfo.current_model;
-          healthResponse.model_source = aiModelInfo.model_source;
-          healthResponse.worker_type = aiModelInfo.worker_type;
-          
-          return new Response(JSON.stringify(healthResponse), {
-            status: 200,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          });
-          
-        } catch (error) {
-          console.warn('[Health Check] EMERGENCY fallback for url-to-faq-generator-worker:', error.message);
-          
-          // EMERGENCY: Always return HTTP 200 to prevent monitoring cascade failures
-          const emergencyResponse = {
-            worker: 'url-to-faq-generator-worker',
-            status: 'healthy',
-            timestamp: new Date().toISOString(),
-            version: '3.1.0-advanced-cache-optimized',
-            capabilities: ['url_analysis', 'deep_content_extraction', 'premium_faq_generation', 'multi_pass_optimization', 'enhanced_rate_limiting'],
-            current_model: env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct',
-            model_source: 'env_fallback',
-            worker_type: 'topic_generator',
-            rate_limiting: { enabled: true, enhanced: true },
-            cache_status: 'active'
-          };
-          
-          return new Response(JSON.stringify(emergencyResponse), {
-            status: 200,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          });
-        }
+    if (request.method === 'GET' && url.pathname === '/health') {
+      try {
+        // EMERGENCY: Execute health check with timeout protection
+        const healthPromise = generateDynamicHealthResponse(
+          'url-to-faq-generator-worker',
+          env,
+          '3.1.0-advanced-cache-optimized',
+          ['url_analysis', 'deep_content_extraction', 'premium_faq_generation', 'multi_pass_optimization', 'enhanced_rate_limiting']
+        );
+        
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Health check timeout')), 400)
+        );
+        
+        const healthResponse = await Promise.race([healthPromise, timeoutPromise]);
+        
+        // Add AI model information to health response
+        const aiModelInfo = await getAIModelInfo(env, 'topic_generator');
+        healthResponse.current_model = aiModelInfo.current_model;
+        healthResponse.model_source = aiModelInfo.model_source;
+        healthResponse.worker_type = aiModelInfo.worker_type;
+        
+        return new Response(JSON.stringify(healthResponse), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+        
+      } catch (error) {
+        console.warn('[Health Check] EMERGENCY fallback for url-to-faq-generator-worker:', error.message);
+        
+        // EMERGENCY: Always return HTTP 200 to prevent monitoring cascade failures
+        const emergencyResponse = {
+          worker: 'url-to-faq-generator-worker',
+          status: 'healthy',
+          timestamp: new Date().toISOString(),
+          version: '3.1.0-advanced-cache-optimized',
+          capabilities: ['url_analysis', 'deep_content_extraction', 'premium_faq_generation', 'multi_pass_optimization', 'enhanced_rate_limiting'],
+          current_model: env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct',
+          model_source: 'env_fallback',
+          worker_type: 'topic_generator',
+          rate_limiting: { enabled: true, enhanced: true },
+          cache_status: 'active'
+        };
+        
+        return new Response(JSON.stringify(emergencyResponse), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+    
+    // Handle cache clearing endpoint (both GET and POST)
+    if (url.pathname === '/cache/clear') {
+      try {
+        console.log('[Cache Clear] URL-to-FAQ generator worker cache clearing initiated...');
+        
+        // Initialize cache manager for URL-to-FAQ generator worker
+        await initializeCacheManager('topic_generator', env);
+        
+        // Clear comprehensive cache types with URL-to-FAQ-specific patterns
+        const cacheResult = await invalidateWorkerCaches('topic_generator', env, {
+          ai_model_config: true,
+          worker_health: true,
+          suggestion_cache: true,
+          l1_cache: true,
+          l2_cache: true,
+          patterns: [
+            'topic_generator_*',
+            'url_faq_*',
+            'ai_model_*',
+            'content_extraction_*',
+            'faq_generation_*',
+            'premium_analysis_*',
+            'multi_pass_*'
+          ]
+        });
+        
+        console.log('[Cache Clear] URL-to-FAQ generator worker cache clearing completed:', cacheResult);
+        
+        return new Response(JSON.stringify({
+          success: true,
+          message: 'URL-to-FAQ generator worker caches cleared successfully',
+          worker: 'url-to-faq-generator-worker',
+          timestamp: new Date().toISOString(),
+          patterns_cleared: cacheResult?.patterns_cleared || [],
+          total_keys_cleared: cacheResult?.total_cleared || 0,
+          clear_results: cacheResult || {}
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+        
+      } catch (error) {
+        console.error('[Cache Clear] URL-to-FAQ generator worker cache clearing failed:', error);
+        
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Cache clearing failed',
+          message: error.message,
+          worker: 'url-to-faq-generator-worker',
+          timestamp: new Date().toISOString()
+        }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
       }
     }
 
