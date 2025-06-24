@@ -1,10 +1,7 @@
 /**
- * FAQ Realtime Assistant Worker - Enhanced Contextual Redesign (FIXED VERSION)
- *
- * TRANSFORMATION: Complex panel responses → Simple contextual suggestions with JIT learning
+ * FAQ Question Generator Worker - Enhanced Question Generation (FIXED VERSION)
  *
  * Features:
- * - Educational benefits/explanations for each suggestion (JIT Learning)
  * - Smart website context integration
  * - SEO scoring and keyword optimization
  * - Question type detection and specialized suggestions
@@ -12,14 +9,17 @@
  * - Enhanced IP-based rate limiting with violation tracking and progressive penalties
  * - Enhanced error handling and fallbacks
  * - Grammar checking and improvement
+ * - Duplicate detection and prevention
  *
- * FIXES APPLIED:
- * ✅ Increased token limits (200-250) for complete responses
- * ✅ Robust JSON parsing with multiple fallback methods
- * ✅ Better cache key generation
- * ✅ Regex extraction fallback system
- * ✅ Enhanced error handling and logging
- * ✅ Enhanced IP-based rate limiting integration
+ * CLAUDE 4 OPUS FIXES APPLIED:
+ * ✅ Better system prompts (less restrictive)
+ * ✅ Increased token limits (500) and temperature (0.7) for creativity
+ * ✅ Added top_p parameter for better diversity
+ * ✅ Improved JSON parsing with multiple extraction strategies
+ * ✅ Better contextual fallbacks
+ * ✅ Enhanced prompt examples with clear structure
+ * ✅ Removed realtime typing assistance (per user request)
+ * ✅ Added comprehensive debug logging for AI responses
  */
 
 import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
@@ -334,17 +334,18 @@ export default {
         const healthResponse = await generateDynamicHealthResponse(
           'faq-realtime-assistant-worker',
           env,
-          '3.1.0-advanced-cache-optimized',
+          '3.3.0-enhanced-generation-fixed-debug',
           [
             'contextual_question_suggestions',
-            'typing_assistance',
             'question_improvement',
             'validation_tips',
             'duplicate_detection',
             'grammar_checking',
             'seo_optimization',
             'enhanced_rate_limiting',
-            'ip_management'
+            'ip_management',
+            'improved_ai_prompting',
+            'comprehensive_debug_logging'
           ]
         );
         
@@ -383,7 +384,6 @@ export default {
           const cacheManager = initializeCacheManager(env);
           await invalidateWorkerCaches('ai_model_config', env);
           await cacheManager.invalidate('faq_improve_*');
-          await cacheManager.invalidate('faq_typing_*');
           await cacheManager.invalidate('faq_tips_*');
           
           const clearDuration = ((Date.now() - clearStartTime) / 1000).toFixed(2);
@@ -593,14 +593,10 @@ export default {
       console.log(`[Main Handler] Starting ${mode} generation with duplicate prevention...`);
       
       switch (mode) {
-        case 'typing':
-        case 'autocomplete':
-          suggestions = await generateEnhancedTypingSuggestions(questions, currentAnswer, questionAnalysis, env, websiteContext);
-          break;
-          
         case 'improve':
         case 'enhance':
         case 'regenerate':
+        case 'generate':
           suggestions = await generateEnhancedImprovementSuggestions(questions, currentAnswer, questionAnalysis, env, websiteContext);
           break;
           
@@ -714,60 +710,6 @@ export default {
 };
 
 /**
- * Generate enhanced typing suggestions with educational benefits
- */
-async function generateEnhancedTypingSuggestions(questions, currentAnswer, analysis, env, websiteContext) {
-  const stepStartTime = Date.now();
-  const primaryQuestion = questions[0];
-  console.log(`[Enhanced Typing] Starting generation for primary question: "${primaryQuestion.substring(0, 50)}..."`);
-  console.log(`[Enhanced Typing] Avoiding duplicates from ${questions.length} existing questions`);
-  
-  const cleanQuestion = primaryQuestion.trim();
-  
-  // If question is very short, provide smart autocomplete
-  if (cleanQuestion.length < 10) {
-    const suggestions = generateSmartAutocompleteSuggestions(cleanQuestion, analysis, websiteContext, questions);
-    const duration = ((Date.now() - stepStartTime) / 1000).toFixed(2);
-    console.log(`[Enhanced Typing] Autocomplete suggestions generated in ${duration}s`);
-    return suggestions;
-  }
-  
-  // For longer questions, provide instant improvement hints with benefits
-  const prompt = buildEnhancedTypingPrompt(questions, currentAnswer, analysis, websiteContext);
-  console.log(`[Enhanced Typing] Prompt built, calling AI...`);
-  
-  // Get dynamic AI model for this worker type
-  const aiModel = await getAIModel(env, 'question_generator');
-  
-  const aiResult = await callAIWithRetry(env.AI, aiModel, {
-    messages: [
-      {
-        role: 'system',
-        content: 'You MUST respond with ONLY a JSON array. Start immediately with [ and end with ]. No markdown, no explanations, no code blocks. Format: [{"text":"question","benefit":"benefit","reason":"reason"}]'
-      },
-      { role: 'user', content: prompt }
-    ],
-    max_tokens: 300,  // ✅ INCREASED FURTHER TO PREVENT TRUNCATION
-    temperature: 0.2   // ✅ REDUCED FOR MORE CONSISTENT OUTPUT
-  }, 'Enhanced Typing');
-
-  const totalDuration = ((Date.now() - stepStartTime) / 1000).toFixed(2);
-  
-  if (aiResult.success) {
-    console.log(`[Enhanced Typing] AI call successful in ${aiResult.duration}s, parsing response...`);
-    const rawSuggestions = parseEnhancedResponse(aiResult.response.response, 'typing');
-    const filteredSuggestions = filterDuplicateSuggestions(rawSuggestions, analysis.duplicatePatterns, 'Enhanced Typing');
-    console.log(`[Enhanced Typing] Total step completed in ${totalDuration}s, returned ${filteredSuggestions.length} unique suggestions`);
-    return filteredSuggestions.length > 0 ? filteredSuggestions : getEnhancedTypingFallbacks(cleanQuestion, analysis, questions);
-  } else {
-    console.error(`[Enhanced Typing] AI failed after ${aiResult.duration}s: ${aiResult.error}`);
-    const fallbacks = getEnhancedTypingFallbacks(cleanQuestion, analysis, questions);
-    console.log(`[Enhanced Typing] Using ${fallbacks.length} fallback suggestions, total time: ${totalDuration}s`);
-    return fallbacks;
-  }
-}
-
-/**
  * Generate enhanced improvement suggestions with educational benefits
  */
 async function generateEnhancedImprovementSuggestions(questions, currentAnswer, analysis, env, websiteContext) {
@@ -787,19 +729,20 @@ async function generateEnhancedImprovementSuggestions(questions, currentAnswer, 
     messages: [
       {
         role: 'system',
-        content: 'You MUST respond with ONLY a JSON array. Start immediately with [ and end with ]. No markdown, no explanations, no code blocks. Format: [{"text":"question","benefit":"benefit","reason":"reason"}]'
+        content: 'You are a helpful assistant that generates FAQ questions. Respond with a JSON array following the exact format shown in the examples. Be creative and helpful.'
       },
       { role: 'user', content: prompt }
     ],
-    max_tokens: 350,  // ✅ INCREASED FOR IMPROVEMENT SUGGESTIONS
-    temperature: 0.2   // ✅ REDUCED FOR CONSISTENCY
+    max_tokens: 500,  // ✅ INCREASED SIGNIFICANTLY
+    temperature: 0.7,  // ✅ HIGHER FOR CREATIVITY
+    top_p: 0.9        // ✅ ADD TOP_P FOR BETTER DIVERSITY
   }, 'Enhanced Improvement');
 
   const totalDuration = ((Date.now() - stepStartTime) / 1000).toFixed(2);
   
   if (aiResult.success) {
     console.log(`[Enhanced Improvement] AI call successful in ${aiResult.duration}s, parsing response...`);
-    const rawSuggestions = parseEnhancedResponse(aiResult.response.response, 'improve');
+    const rawSuggestions = parseEnhancedResponseWithDebug(aiResult.response.response, 'improve');
     const filteredSuggestions = filterDuplicateSuggestions(rawSuggestions, analysis.duplicatePatterns, 'Enhanced Improvement');
     console.log(`[Enhanced Improvement] Total step completed in ${totalDuration}s, returned ${filteredSuggestions.length} unique suggestions`);
     return filteredSuggestions.length > 0 ? filteredSuggestions : getEnhancedImprovementFallbacks(primaryQuestion, analysis, questions);
@@ -830,19 +773,20 @@ async function generateEnhancedValidationTips(questions, currentAnswer, analysis
     messages: [
       {
         role: 'system',
-        content: 'You MUST respond with ONLY a JSON array. Start immediately with [ and end with ]. No markdown, no explanations, no code blocks. Format: [{"text":"tip","benefit":"benefit","reason":"reason"}]'
+        content: 'You are a helpful assistant that generates FAQ questions. Respond with a JSON array following the exact format shown in the examples. Be creative and helpful.'
       },
       { role: 'user', content: prompt }
     ],
-    max_tokens: 300,  // ✅ INCREASED FOR VALIDATION TIPS
-    temperature: 0.1   // ✅ VERY LOW FOR CONSISTENT TIPS
+    max_tokens: 500,  // ✅ INCREASED SIGNIFICANTLY
+    temperature: 0.7,  // ✅ HIGHER FOR CREATIVITY
+    top_p: 0.9        // ✅ ADD TOP_P FOR BETTER DIVERSITY
   }, 'Enhanced Validation');
 
   const totalDuration = ((Date.now() - stepStartTime) / 1000).toFixed(2);
   
   if (aiResult.success) {
     console.log(`[Enhanced Validation] AI call successful in ${aiResult.duration}s, parsing tips...`);
-    const suggestions = parseEnhancedResponse(aiResult.response.response, 'tips');
+    const suggestions = parseEnhancedResponseWithDebug(aiResult.response.response, 'tips');
     console.log(`[Enhanced Validation] Total step completed in ${totalDuration}s, returned ${suggestions.length} validation tips`);
     return suggestions.length > 0 ? suggestions : getEnhancedValidationFallbacks(primaryQuestion, analysis, questions);
   } else {
@@ -935,74 +879,50 @@ function categorizeError(error) {
 /**
  * Build prompts optimized for different contextual modes with duplicate prevention
  */
-function buildEnhancedTypingPrompt(questions, currentAnswer, analysis, websiteContext) {
-  const primaryQuestion = questions[0];
-  const contextHint = websiteContext ? `Website context: ${websiteContext.substring(0, 100)}...` : '';
-  const typeHint = `Question type: ${analysis.type}`;
-  const keywordHint = analysis.keywords.length > 0 ? `Key terms: ${analysis.keywords.join(', ')}` : '';
-  const answerContext = currentAnswer ? `Current answer: ${currentAnswer.substring(0, 150)}...` : '';
-  
-  let existingQuestionsText = '';
-  if (questions.length > 1) {
-    existingQuestionsText = '\nEXISTING QUESTIONS TO AVOID:\n' + 
-      questions.map((q, i) => `${i + 1}. ${q}`).join('\n') + '\n';
-  }
-  
-  return `Return JSON array of 2 improved question suggestions. Each object must have "text", "benefit", and "reason" properties. ENSURE PERFECT GRAMMAR AND PUNCTUATION.
-
-Current question: "${primaryQuestion}"
-${contextHint}
-${typeHint}
-${keywordHint}
-${answerContext}
-SEO Score: ${analysis.seoScore}/100
-${existingQuestionsText}
-CRITICAL: Do NOT suggest any questions that are similar to the existing questions above.
-
-Focus on making questions more specific and SEO-friendly while being completely different from existing questions. Ensure all suggestions have perfect grammar, proper punctuation, and professional language.
-
-Example format:
-[
-  {
-    "text": "How can I optimize my website for better search rankings?",
-    "benefit": "More specific targeting",
-    "reason": "Focuses on concrete outcome users want"
-  }
-]`;
-}
-
 function buildEnhancedImprovementPrompt(questions, currentAnswer, analysis, websiteContext) {
   const primaryQuestion = questions[0];
-  const contextHint = websiteContext ? `Website context: ${websiteContext.substring(0, 150)}...` : '';
-  const improvementHints = analysis.improvements.length > 0 ? `Needs: ${analysis.improvements.join(', ')}` : '';
-  const answerContext = currentAnswer ? `Current answer: ${currentAnswer.substring(0, 200)}...` : '';
+  const contextHint = websiteContext ? `Context: ${websiteContext.substring(0, 150)}` : '';
   
-  let existingQuestionsText = '';
-  if (questions.length > 1) {
-    existingQuestionsText = '\nEXISTING QUESTIONS TO AVOID:\n' + 
-      questions.map((q, i) => `${i + 1}. ${q}`).join('\n') + '\n';
-  }
-  
-  return `Return JSON array of 3 enhanced question versions. Each object must have "text", "benefit", and "reason" properties. ENSURE PERFECT GRAMMAR AND PUNCTUATION.
+  return `Create 3 alternative FAQ questions related to "${primaryQuestion}". 
 
-Question: "${primaryQuestion}"
 ${contextHint}
-Type: ${analysis.type} | SEO Score: ${analysis.seoScore}/100
-${improvementHints}
-${answerContext}
-${existingQuestionsText}
-CRITICAL: Your suggestions must be completely different from all existing questions listed above.
 
-Make them more SEO-friendly, specific, and user-focused while ensuring they are unique and not similar to existing questions. All suggestions must have perfect grammar, proper punctuation, and professional language.
-
-Example format:
+Return ONLY a JSON array in this format:
 [
   {
-    "text": "What are the most effective SEO strategies for small businesses?",
-    "benefit": "Better keyword targeting",
-    "reason": "Long-tail keywords improve search visibility"
+    "text": "alternative question",
+    "benefit": "why this helps",
+    "reason": "user value"
   }
-]`;
+]
+
+Focus on different angles users might approach this topic from. Consider:
+- How-to questions
+- Cost/pricing questions  
+- Comparison questions
+- Problem-solving questions
+- Feature-specific questions
+
+Example for "What is web hosting?":
+[
+  {
+    "text": "How do I choose the right web hosting provider?",
+    "benefit": "Decision-making help",
+    "reason": "Users need guidance on selection criteria"
+  },
+  {
+    "text": "What's the difference between shared and dedicated hosting?",
+    "benefit": "Comparison clarity",
+    "reason": "Users want to understand hosting types"
+  },
+  {
+    "text": "How much should I budget for web hosting?",
+    "benefit": "Financial planning",
+    "reason": "Cost is a key consideration"
+  }
+]
+
+Now generate alternatives for the given question:`;
 }
 
 function buildEnhancedValidationPrompt(questions, currentAnswer, analysis, websiteContext) {
@@ -1033,248 +953,154 @@ Example format:
 }
 
 /**
- * ENHANCED JSON PARSING WITH MARKDOWN CLEANUP (IMPROVED)
+ * ENHANCED JSON PARSING WITH COMPREHENSIVE DEBUG LOGGING
  */
-function parseEnhancedResponse(aiResponse, mode) {
+function parseEnhancedResponseWithDebug(aiResponse, mode) {
   if (!aiResponse || typeof aiResponse !== 'string') {
     console.error(`[Parse Enhanced ${mode}] ❌ Invalid response type:`, typeof aiResponse);
-    return getFallbackSuggestions_Fixed(mode);
+    return getContextualFallbacks(mode);
   }
 
-  console.log(`[Parse Enhanced ${mode}] Raw response (${aiResponse.length} chars):`, aiResponse.substring(0, 200));
+  // COMPREHENSIVE DEBUG LOGGING
+  console.log(`[Parse Enhanced ${mode}] ========== FULL AI RESPONSE DEBUG ==========`);
+  console.log(`[Parse Enhanced ${mode}] Response length: ${aiResponse.length} characters`);
+  console.log(`[Parse Enhanced ${mode}] Response type: ${typeof aiResponse}`);
+  console.log(`[Parse Enhanced ${mode}] Raw response (FULL):`);
+  console.log(aiResponse);
+  console.log(`[Parse Enhanced ${mode}] =============================================`);
 
   let cleaned = aiResponse.trim();
   
-  // AGGRESSIVE CLEANUP: Remove common AI response patterns
-  cleaned = cleaned
-    // Remove markdown code blocks
-    .replace(/```json\s*/gi, '')
-    .replace(/```\s*/g, '')
-    // Remove explanatory text before JSON
-    .replace(/^.*?(?=\[)/s, '')
-    // Remove "Here's" type introductions
-    .replace(/^Here's.*?:\s*/gi, '')
-    .replace(/^.*?JSON.*?format.*?:\s*/gi, '')
-    .replace(/^.*?array.*?:\s*/gi, '')
-    // Clean up any remaining text before [
-    .replace(/^[^[]*/, '')
-    .trim();
-
-  console.log(`[Parse Enhanced ${mode}] Cleaned response (${cleaned.length} chars):`, cleaned.substring(0, 150));
+  // Try multiple extraction strategies
   
-  // Find JSON boundaries
-  let jsonStart = cleaned.indexOf('[');
-  let jsonEnd = cleaned.lastIndexOf(']');
-  
-  // If we can't find complete brackets, try to find partial JSON
-  if (jsonStart === -1 || jsonEnd === -1 || jsonEnd <= jsonStart) {
-    console.warn(`[Parse Enhanced ${mode}] ❌ No complete JSON brackets found after cleanup`);
-    return tryAdvancedExtraction(cleaned, mode);
-  }
-  
-  const jsonText = cleaned.substring(jsonStart, jsonEnd + 1);
-  console.log(`[Parse Enhanced ${mode}] Extracted JSON (${jsonText.length} chars):`, jsonText.substring(0, 150));
-  
+  // Strategy 1: Direct JSON parsing
   try {
-    const parsed = JSON.parse(jsonText);
-    console.log(`[Parse Enhanced ${mode}] ✅ JSON parsing successful - ${parsed.length} items found`);
-    
-    // Validate and clean structure
-    const validated = parsed
-      .filter(item => item && typeof item === 'object' && item.text && item.benefit && item.reason)
-      .map(item => ({
-        text: improveGrammar(String(item.text).trim()),
-        benefit: improveGrammar(String(item.benefit).trim()),
-        reason: improveGrammar(String(item.reason).trim()),
-        type: mode === 'tips' ? 'tip' : 'suggestion'
-      }))
-      .filter(item => item.text.length > 5 && item.text.length < 300);
-    
-    console.log(`[Parse Enhanced ${mode}] ✅ Validated ${validated.length} suggestions`);
-    return validated.length > 0 ? validated : getFallbackSuggestions_Fixed(mode);
-    
-  } catch (jsonError) {
-    console.error(`[Parse Enhanced ${mode}] ❌ JSON parse error:`, jsonError.message);
-    console.log(`[Parse Enhanced ${mode}] Failed JSON:`, jsonText.substring(0, 150));
-    
-    // Try advanced extraction as fallback
-    return tryAdvancedExtraction(cleaned, mode);
-  }
-}
-
-/**
- * ADVANCED EXTRACTION METHODS (IMPROVED)
- */
-function tryAdvancedExtraction(text, mode) {
-  console.log(`[Parse Enhanced ${mode}] 🔄 Trying advanced extraction methods`);
-  
-  // Method 1: Extract JSON objects with regex
-  const objectPattern = /\{\s*"text"\s*:\s*"([^"]+)"\s*,\s*"benefit"\s*:\s*"([^"]+)"\s*,\s*"reason"\s*:\s*"([^"]+)"\s*\}/g;
-  const objectMatches = [...text.matchAll(objectPattern)];
-  
-  if (objectMatches.length > 0) {
-    console.log(`[Parse Enhanced ${mode}] ✅ Method 1: Found ${objectMatches.length} complete JSON objects`);
-    return objectMatches.map(match => ({
-      text: improveGrammar(match[1].trim()),
-      benefit: improveGrammar(match[2].trim()),
-      reason: improveGrammar(match[3].trim()),
-      type: mode === 'tips' ? 'tip' : 'suggestion'
-    }));
-  }
-  
-  // Method 2: Extract partial objects and reconstruct
-  const textPattern = /"text"\s*:\s*"([^"]+)"/gi;
-  const benefitPattern = /"benefit"\s*:\s*"([^"]+)"/gi;
-  const reasonPattern = /"reason"\s*:\s*"([^"]+)"/gi;
-  
-  const texts = [...text.matchAll(textPattern)];
-  const benefits = [...text.matchAll(benefitPattern)];
-  const reasons = [...text.matchAll(reasonPattern)];
-  
-  if (texts.length > 0 && benefits.length > 0 && reasons.length > 0) {
-    console.log(`[Parse Enhanced ${mode}] ✅ Method 2: Reconstructing from ${Math.min(texts.length, benefits.length, reasons.length)} partial objects`);
-    
-    const reconstructed = [];
-    const maxItems = Math.min(texts.length, benefits.length, reasons.length, 3);
-    
-    for (let i = 0; i < maxItems; i++) {
-      reconstructed.push({
-        text: improveGrammar(texts[i][1].trim()),
-        benefit: improveGrammar(benefits[i][1].trim()),
-        reason: improveGrammar(reasons[i][1].trim()),
-        type: mode === 'tips' ? 'tip' : 'suggestion'
-      });
+    console.log(`[Parse Enhanced ${mode}] 🔄 Trying Strategy 1: Direct JSON parsing...`);
+    // Look for JSON array anywhere in the response
+    const jsonMatch = cleaned.match(/\[\s*\{[\s\S]*?\}\s*\]/);
+    if (jsonMatch) {
+      console.log(`[Parse Enhanced ${mode}] Found JSON match:`, jsonMatch[0]);
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const validated = validateAndCleanSuggestions(parsed, mode);
+        if (validated.length > 0) {
+          console.log(`[Parse Enhanced ${mode}] ✅ Strategy 1 successful: ${validated.length} items`);
+          return validated;
+        }
+      }
+    } else {
+      console.log(`[Parse Enhanced ${mode}] ❌ No JSON array pattern found in response`);
     }
-    
-    return reconstructed;
+  } catch (e) {
+    console.log(`[Parse Enhanced ${mode}] ❌ Strategy 1 failed:`, e.message);
   }
-  
-  // Method 3: Extract questions and create generic structure
-  const questionPatterns = [
-    /(How|What|Why|When|Where)\s+[^?\n]*\?/gi,
-    /"([^"]*\?[^"]*)"/gi
-  ];
-  
-  for (const pattern of questionPatterns) {
-    const matches = [...text.matchAll(pattern)];
+
+  // Strategy 2: Extract individual objects
+  try {
+    console.log(`[Parse Enhanced ${mode}] 🔄 Trying Strategy 2: Individual object extraction...`);
+    const objectPattern = /\{[^{}]*"text"\s*:\s*"([^"]+)"[^{}]*"benefit"\s*:\s*"([^"]+)"[^{}]*"reason"\s*:\s*"([^"]+)"[^{}]*\}/g;
+    const matches = [...cleaned.matchAll(objectPattern)];
+    
+    console.log(`[Parse Enhanced ${mode}] Found ${matches.length} object matches`);
+    
     if (matches.length > 0) {
-      console.log(`[Parse Enhanced ${mode}] ✅ Method 3: Found ${matches.length} question patterns`);
-      return matches.slice(0, 3).map(match => ({
-        text: improveGrammar(match[1] || match[0]),
-        benefit: mode === 'tips' ? 'Improvement tip' : 'Enhanced version',
-        reason: 'Better structure and clarity',
+      const suggestions = matches.map(match => ({
+        text: improveGrammar(match[1].trim()),
+        benefit: match[2].trim(),
+        reason: match[3].trim(),
         type: mode === 'tips' ? 'tip' : 'suggestion'
       }));
+      
+      console.log(`[Parse Enhanced ${mode}] ✅ Strategy 2 successful: ${suggestions.length} items`);
+      return suggestions;
     }
+  } catch (e) {
+    console.log(`[Parse Enhanced ${mode}] ❌ Strategy 2 failed:`, e.message);
   }
-  
-  console.warn(`[Parse Enhanced ${mode}] ❌ All advanced extraction methods failed`);
-  return getFallbackSuggestions_Fixed(mode);
+
+  // Strategy 3: Extract questions with quotes
+  try {
+    console.log(`[Parse Enhanced ${mode}] 🔄 Trying Strategy 3: Question extraction with quotes...`);
+    const questionPattern = /"([^"]*\?[^"]*)"/g;
+    const questions = [...cleaned.matchAll(questionPattern)];
+    
+    console.log(`[Parse Enhanced ${mode}] Found ${questions.length} quoted questions`);
+    
+    if (questions.length >= 2) {
+      const suggestions = questions.slice(0, 3).map((match, index) => ({
+        text: improveGrammar(match[1]),
+        benefit: `Alternative ${index + 1}`,
+        reason: 'Provides different perspective on the topic',
+        type: 'suggestion'
+      }));
+      
+      console.log(`[Parse Enhanced ${mode}] ✅ Strategy 3 successful: ${suggestions.length} questions extracted`);
+      return suggestions;
+    }
+  } catch (e) {
+    console.log(`[Parse Enhanced ${mode}] ❌ Strategy 3 failed:`, e.message);
+  }
+
+  // If all strategies fail, return better fallbacks
+  console.warn(`[Parse Enhanced ${mode}] ❌ All parsing strategies failed, returning contextual fallbacks`);
+  const fallbacks = getContextualFallbacks(mode);
+  console.log(`[Parse Enhanced ${mode}] ✅ Returning ${fallbacks.length} fallback suggestions`);
+  return fallbacks;
 }
 
-/**
- * BETTER FALLBACK SUGGESTIONS (FIXED)
- */
-function getFallbackSuggestions_Fixed(mode) {
+// Helper function to validate and clean suggestions
+function validateAndCleanSuggestions(parsed, mode) {
+  return parsed
+    .filter(item => item && typeof item === 'object')
+    .map(item => ({
+      text: improveGrammar(String(item.text || '').trim()),
+      benefit: String(item.benefit || 'Improved version').trim(),
+      reason: String(item.reason || 'Better user experience').trim(),
+      type: mode === 'tips' ? 'tip' : 'suggestion'
+    }))
+    .filter(item => item.text.length > 10 && item.text.length < 300);
+}
+
+// Better contextual fallbacks based on common patterns
+function getContextualFallbacks(mode) {
   const fallbacks = {
-    typing: [
-      {
-        text: "Consider adding more specific details to your question",
-        benefit: "Better targeting",
-        reason: "Specific questions help users find exactly what they need",
-        type: "suggestion"
-      }
-    ],
     improve: [
       {
-        text: "Try starting with 'How', 'What', or 'Why' for better SEO",
-        benefit: "Voice search optimization",
-        reason: "Question words help voice assistants understand intent",
+        text: "What are the key features of this service?",
+        benefit: "Feature-focused",
+        reason: "Users need specific capability information",
+        type: "suggestion"
+      },
+      {
+        text: "How much does this typically cost?",
+        benefit: "Price transparency",
+        reason: "Cost is a primary decision factor",
+        type: "suggestion"
+      },
+      {
+        text: "What problems does this solve?",
+        benefit: "Problem-solution fit",
+        reason: "Users search for solutions to their problems",
         type: "suggestion"
       }
     ],
     tips: [
       {
-        text: "End questions with a question mark (?)",
-        benefit: "Better recognition",
-        reason: "Search engines identify questions by question marks",
+        text: "Include specific keywords your audience searches for",
+        benefit: "Better SEO",
+        reason: "Matches user search intent",
+        type: "tip"
+      },
+      {
+        text: "Make questions conversational and natural",
+        benefit: "User-friendly",
+        reason: "Mirrors how people actually ask questions",
         type: "tip"
       }
     ]
   };
   
   return fallbacks[mode] || fallbacks.improve;
-}
-
-/**
- * Enhanced fallback suggestions with educational benefits and duplicate prevention
- */
-function generateSmartAutocompleteSuggestions(partial, analysis, websiteContext, existingQuestions) {
-  const lowerPartial = partial.toLowerCase();
-  
-  // Smart autocomplete based on common patterns
-  const smartSuggestions = [
-    { 
-      text: improveGrammar('How do I ' + lowerPartial + '...'), 
-      benefit: 'Action-oriented format',
-      reason: 'Users prefer step-by-step guidance',
-      type: 'suggestion'
-    },
-    { 
-      text: improveGrammar('What is ' + lowerPartial + '...'), 
-      benefit: 'Clear definition format',
-      reason: 'Perfect for featured snippets',
-      type: 'suggestion'
-    },
-    { 
-      text: improveGrammar('Why should I ' + lowerPartial + '...'), 
-      benefit: 'Benefit-focused approach',
-      reason: 'Addresses user motivation',
-      type: 'suggestion'
-    }
-  ];
-  
-  // Filter out duplicates
-  const duplicatePatterns = (existingQuestions || []).map(q => ({
-    original: q,
-    normalized: normalizeQuestionForComparison(q),
-    keywords: extractKeywordsForComparison(q)
-  }));
-  
-  const filtered = filterDuplicateSuggestions(smartSuggestions, duplicatePatterns, 'Autocomplete');
-  return filtered.slice(0, 2);
-}
-
-function getEnhancedTypingFallbacks(question, analysis, existingQuestions) {
-  const suggestions = [];
-  
-  if (!analysis.hasQuestionMark) {
-    suggestions.push({
-      text: improveGrammar(question + '?'),
-      benefit: 'Proper question format',
-      reason: 'Search engines prefer questions with question marks',
-      type: 'suggestion'
-    });
-  }
-  
-  if (analysis.length < 20) {
-    suggestions.push({
-      text: improveGrammar('Add more specific details to: "' + question + '"'),
-      benefit: 'Better targeting',
-      reason: 'Specific questions rank higher in search results',
-      type: 'tip'
-    });
-  }
-  
-  // Filter out duplicates
-  const duplicatePatterns = (existingQuestions || []).map(q => ({
-    original: q,
-    normalized: normalizeQuestionForComparison(q),
-    keywords: extractKeywordsForComparison(q)
-  }));
-  
-  const filtered = filterDuplicateSuggestions(suggestions, duplicatePatterns, 'Typing Fallbacks');
-  return filtered.slice(0, 2);
 }
 
 function getEnhancedImprovementFallbacks(question, analysis, existingQuestions) {
@@ -1414,8 +1240,6 @@ function createCacheKey(questions, mode, websiteContext) {
   return cacheKey;
 }
 
-
-
 async function getCachedResponse(cacheKey, env) {
   const startTime = Date.now();
   
@@ -1429,7 +1253,7 @@ async function getCachedResponse(cacheKey, env) {
     
     console.log(`[Cache Debug] Raw cached result: ${cached ? 'Found' : 'Not found'}`);
     
-    if (cached && cached.metadata && cached.metadata.timestamp) { // ✅ ENHANCED: Check metadata.timestamp
+    if (cached && cached.metadata && cached.metadata.timestamp) {
       const age = Date.now() - new Date(cached.metadata.timestamp).getTime();
       const ageInMinutes = (age / 60000).toFixed(1);
       
@@ -1462,8 +1286,6 @@ async function getCachedResponse(cacheKey, env) {
   return null;
 }
 
-// CACHE FIX: Find this section in your worker (around line 750-780)
-
 async function cacheResponse(cacheKey, response, env) {
   const startTime = Date.now();
   
@@ -1474,7 +1296,7 @@ async function cacheResponse(cacheKey, response, env) {
   try {
     // Add cache metadata
     response.metadata.cache_key = cacheKey;
-    response.metadata.timestamp = new Date().toISOString(); // ✅ FIXED: Use 'timestamp' not 'cached_at'
+    response.metadata.timestamp = new Date().toISOString();
     
     // Cache for 1 hour
     await env.FAQ_CACHE?.put(cacheKey, JSON.stringify(response), { expirationTtl: 3600 });
@@ -1490,5 +1312,3 @@ async function cacheResponse(cacheKey, response, env) {
     console.error(`[Cache] ❌ Error setting cache in ${duration}s:`, error);
   }
 }
-
-// Old rate limiting functions removed - now using enhanced rate limiting system

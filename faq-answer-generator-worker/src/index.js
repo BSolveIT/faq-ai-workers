@@ -428,7 +428,7 @@ export default {
         const healthResponse = await generateDynamicHealthResponse(
           'faq-answer-generator-worker',
           env,
-          '3.1.0-advanced-cache-optimized',
+          '3.2.0-enhanced-context',
           [
             'answer_generation',
             'answer_improvement',
@@ -784,8 +784,8 @@ async function generateEnhancedAnswerSuggestions(question, answers, analysis, en
       },
       { role: 'user', content: prompt }
     ],
-    max_tokens: 350,  // Increased for dual-format answers
-    temperature: 0.2   // Reduced for consistency
+    max_tokens: 600,  // Increased for enhanced context utilization
+    temperature: 0.4   // Increased for more creative context-aware responses
   }, 'Enhanced Answer Generation');
 
   const totalDuration = ((Date.now() - stepStartTime) / 1000).toFixed(2);
@@ -827,8 +827,8 @@ async function generateEnhancedAnswerImprovements(question, answers, analysis, e
       },
       { role: 'user', content: prompt }
     ],
-    max_tokens: 400,  // Increased for improvement suggestions
-    temperature: 0.2   // Reduced for consistency
+    max_tokens: 700,  // Increased for improvement suggestions with enhanced context
+    temperature: 0.4   // Increased for more creative context-aware responses
   }, 'Enhanced Answer Improvement');
 
   const totalDuration = ((Date.now() - stepStartTime) / 1000).toFixed(2);
@@ -869,8 +869,8 @@ async function generateEnhancedAnswerValidation(question, answers, analysis, env
       },
       { role: 'user', content: prompt }
     ],
-    max_tokens: 300,  // Increased for validation tips
-    temperature: 0.1   // Very low for consistent tips
+    max_tokens: 500,  // Increased for enhanced validation tips
+    temperature: 0.3   // Increased for more nuanced validation guidance
   }, 'Enhanced Answer Validation');
 
   const totalDuration = ((Date.now() - stepStartTime) / 1000).toFixed(2);
@@ -1094,7 +1094,7 @@ function categorizeError(error) {
  * Build prompts optimized for different answer generation modes with duplicate prevention
  */
 function buildEnhancedAnswerGenerationPrompt(question, answers, analysis, websiteContext) {
-  const contextHint = websiteContext ? `Website context: ${websiteContext.substring(0, 150)}...` : '';
+  const contextHint = websiteContext ? `Website context: ${websiteContext.substring(0, 750)}${websiteContext.length > 750 ? '...' : ''}` : '';
   const typeHint = `Question type: ${analysis.questionType} | Answer approach: ${analysis.answerApproach}`;
   const keywordHint = analysis.keywords.length > 0 ? `Key terms to include: ${analysis.keywords.join(', ')}` : '';
   const guidanceHint = analysis.answerGuidance.length > 0 ? `Answer guidance: ${analysis.answerGuidance.join(', ')}` : '';
@@ -1135,7 +1135,7 @@ Example format:
 }
 
 function buildEnhancedAnswerImprovementPrompt(question, answers, analysis, websiteContext) {
-  const contextHint = websiteContext ? `Website context: ${websiteContext.substring(0, 150)}...` : '';
+  const contextHint = websiteContext ? `Website context: ${websiteContext.substring(0, 750)}${websiteContext.length > 750 ? '...' : ''}` : '';
   const improvementHints = analysis.answerGuidance.length > 0 ? `Needs: ${analysis.answerGuidance.join(', ')}` : '';
   
   let existingAnswersText = '';
@@ -1167,7 +1167,7 @@ Example format:
 }
 
 function buildEnhancedAnswerValidationPrompt(question, answers, analysis, websiteContext) {
-  const contextHint = websiteContext ? `Website: ${websiteContext.substring(0, 100)}...` : '';
+  const contextHint = websiteContext ? `Website: ${websiteContext.substring(0, 600)}${websiteContext.length > 600 ? '...' : ''}` : '';
   const issueHints = analysis.answerGuidance.length > 0 ? `Focus areas: ${analysis.answerGuidance.join(', ')}` : 'Generally good structure';
   
   return `Return JSON array of 3 answer quality tips. Each object must have "text", "benefit", "reason", and "type" properties. ENSURE PERFECT GRAMMAR AND PUNCTUATION.
@@ -1193,7 +1193,7 @@ Example format:
 }
 
 function buildEnhancedAnswerExpansionPrompt(question, answers, analysis, websiteContext) {
-  const contextHint = websiteContext ? `Website context: ${websiteContext.substring(0, 150)}...` : '';
+  const contextHint = websiteContext ? `Website context: ${websiteContext.substring(0, 750)}${websiteContext.length > 750 ? '...' : ''}` : '';
   
   let currentAnswerText = '';
   if (answers.length > 0) {
@@ -1221,7 +1221,7 @@ Example format:
 }
 
 function buildEnhancedAnswerExamplesPrompt(question, answers, analysis, websiteContext) {
-  const contextHint = websiteContext ? `Website context: ${websiteContext.substring(0, 150)}...` : '';
+  const contextHint = websiteContext ? `Website context: ${websiteContext.substring(0, 750)}${websiteContext.length > 750 ? '...' : ''}` : '';
   
   return `Return JSON array of 2 answer versions with practical examples. Each object must have "text", "benefit", "reason", and "type" properties.
 
@@ -1243,7 +1243,7 @@ Example format:
 }
 
 function buildEnhancedAnswerTonePrompt(question, answers, analysis, websiteContext, tone) {
-  const contextHint = websiteContext ? `Website context: ${websiteContext.substring(0, 150)}...` : '';
+  const contextHint = websiteContext ? `Website context: ${websiteContext.substring(0, 750)}${websiteContext.length > 750 ? '...' : ''}` : '';
   
   let currentAnswerText = '';
   if (answers.length > 0) {
