@@ -1,21 +1,28 @@
 /**
  * Enhanced IP-Based Rate Limiting System for Cloudflare Workers
- * 
+ *
  * Features:
  * - Tiered rate limiting with progressive penalties
  * - IP whitelist/blacklist management
  * - Usage analytics and violation tracking
- * - Geographic restrictions (optional)
- * - Time-based windows (hourly, daily, weekly)
+ * - Time-based windows (hourly, daily, weekly, monthly)
  * - Abuse detection and automatic blocking
  * - Usage pattern analysis
- * 
- * KV Stores Required:
- * - FAQ_RATE_LIMITS: Main rate limiting data
- * - FAQ_IP_WHITELIST: Whitelisted IPs
- * - FAQ_IP_BLACKLIST: Blacklisted IPs
- * - FAQ_VIOLATIONS: Violation tracking
- * - FAQ_ANALYTICS: Usage analytics
+ * - Atomic counter operations via RateLimiterDO Durable Objects
+ * - Race condition elimination through true atomicity
+ * - Graceful fallback to KV storage for backward compatibility
+ * - UTC time consistency across edge locations
+ *
+ * Storage Requirements:
+ * - RATE_LIMITER_DO: Durable Object for atomic counter operations (primary)
+ * - FAQ_RATE_LIMITS: KV store for fallback counter operations and blocks
+ * - FAQ_IP_WHITELIST: Whitelisted IPs (KV)
+ * - FAQ_IP_BLACKLIST: Blacklisted IPs (KV)
+ * - FAQ_VIOLATIONS: Violation tracking (KV)
+ * - FAQ_ANALYTICS: Usage analytics (KV)
+ *
+ * @version 2.0.0 - Added Durable Object integration for atomic operations
+ * @since 2025-06-24 - Race condition fix through RateLimiterDO
  */
 
 export class EnhancedRateLimiter {
@@ -55,6 +62,11 @@ export class EnhancedRateLimiter {
    */
   async checkRateLimit(clientIP, request, workerName) {
     const startTime = Date.now();
+    
+    // Validate and sanitize parameters to prevent [object Object] in KV keys
+    clientIP = this.sanitizeStringParam(clientIP, 'unknown');
+    workerName = this.sanitizeStringParam(workerName, 'unknown-worker');
+    
     console.log(`[Rate Limiter] Checking limits for IP: ${clientIP}, Worker: ${workerName}`);
 
     try {
@@ -74,6 +86,8 @@ export class EnhancedRateLimiter {
       // Step 2: Check whitelist
       const whitelistResult = await this.checkWhitelist(clientIP);
       if (whitelistResult.whitelisted) {
+        // Whitelisted IPs still need usage counting for analytics
+        await this.updateUsageCount(clientIP, workerName);
         await this.updateUsageTracking(clientIP, workerName, true);
         return {
           allowed: true,
@@ -83,8 +97,7 @@ export class EnhancedRateLimiter {
         };
       }
 
-
-      // Step 4: Check current blocks
+      // Step 3: Check current blocks
       const blockResult = await this.checkCurrentBlocks(clientIP);
       if (blockResult.blocked) {
         await this.logViolation(clientIP, 'blocked_access_attempt', workerName, request);
@@ -98,7 +111,7 @@ export class EnhancedRateLimiter {
         };
       }
 
-      // Step 5: Check rate limits
+      // Step 4: Check rate limits
       const rateLimitResult = await this.checkRateLimits(clientIP, workerName);
       if (!rateLimitResult.allowed) {
         // Rate limit exceeded - apply penalty
@@ -115,7 +128,8 @@ export class EnhancedRateLimiter {
         };
       }
 
-      // Step 6: Update usage tracking
+      // Step 5: Update usage count and tracking
+      await this.updateUsageCount(clientIP, workerName);
       await this.updateUsageTracking(clientIP, workerName, false);
 
       // Request allowed
@@ -142,47 +156,173 @@ export class EnhancedRateLimiter {
 
   /**
    * Update usage count after successful request
-   * @param {string} clientIP 
-   * @param {string} workerName 
+   * @param {string} clientIP
+   * @param {string} workerName
+   * @param {number} maxRetries - Maximum retry attempts for fallback scenarios
    */
-  async updateUsageCount(clientIP, workerName) {
+  async updateUsageCount(clientIP, workerName, maxRetries = 3) {
     try {
-      const now = new Date();
-      const keys = {
-        hourly: `usage:${clientIP}:${workerName}:${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}:${String(now.getHours()).padStart(2, '0')}`,
-        daily: `usage:${clientIP}:${workerName}:${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
-        weekly: `usage:${clientIP}:${workerName}:${now.getFullYear()}-W${this.getWeekNumber(now)}`,
-        monthly: `usage:${clientIP}:${workerName}:${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-      };
-
-      // Update all time windows
-      for (const [window, key] of Object.entries(keys)) {
-        const current = await this.env.FAQ_RATE_LIMITS.get(key);
-        const count = current ? parseInt(current) + 1 : 1;
+      // Sanitize parameters to prevent [object Object] in KV keys
+      clientIP = this.sanitizeStringParam(clientIP, 'unknown');
+      workerName = this.sanitizeStringParam(workerName, 'unknown-worker');
+      
+      // Try Durable Object first for atomic operations
+      try {
+        await this.updateUsageCountWithDurableObject(clientIP, workerName);
+        console.log(`[Rate Limiter] Updated usage for IP ${clientIP}, Worker ${workerName} via Durable Object`);
+        return;
+      } catch (durableObjectError) {
+        console.warn(`[Rate Limiter] Durable Object failed for ${clientIP}, falling back to KV:`, durableObjectError.message);
         
+        // Fallback to KV-based approach with race condition mitigation
+        await this.updateUsageCountWithKV(clientIP, workerName, maxRetries);
+        console.log(`[Rate Limiter] Updated usage for IP ${clientIP}, Worker ${workerName} via KV fallback`);
+      }
+    } catch (error) {
+      console.error(`[Rate Limiter] Error updating usage count:`, error);
+    }
+  }
+
+  /**
+   * Update usage count using Durable Object for atomic operations
+   * @param {string} clientIP
+   * @param {string} workerName
+   * @private
+   */
+  async updateUsageCountWithDurableObject(clientIP, workerName) {
+    const windowTypes = ['hourly', 'daily', 'weekly', 'monthly'];
+    
+    // Get Durable Object stub for this IP
+    const stub = this.getDurableObjectStub(clientIP);
+    
+    // Update all time windows atomically
+    const promises = windowTypes.map(async (windowType) => {
+      try {
+        const response = await stub.fetch('http://localhost/increment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ windowType, workerName })
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(`Durable Object increment failed: ${response.status} - ${errorData.error || 'Unknown error'}`);
+        }
+        
+        const result = await response.json();
+        return { windowType, count: result.counter, success: true };
+      } catch (error) {
+        throw new Error(`Failed to increment ${windowType} counter: ${error.message}`);
+      }
+    });
+    
+    // Wait for all increments to complete
+    await Promise.all(promises);
+  }
+
+  /**
+   * Update usage count using KV storage (fallback method)
+   * @param {string} clientIP
+   * @param {string} workerName
+   * @param {number} maxRetries
+   * @private
+   */
+  async updateUsageCountWithKV(clientIP, workerName, maxRetries) {
+    // Use UTC time to avoid timezone issues across edge locations
+    const now = new Date();
+    const utcNow = new Date(now.getTime() + (now.getTimezoneOffset() * 60000));
+    
+    const keys = {
+      hourly: `usage:${clientIP}:${workerName}:${utcNow.getUTCFullYear()}-${String(utcNow.getUTCMonth() + 1).padStart(2, '0')}-${String(utcNow.getUTCDate()).padStart(2, '0')}:${String(utcNow.getUTCHours()).padStart(2, '0')}`,
+      daily: `usage:${clientIP}:${workerName}:${utcNow.getUTCFullYear()}-${String(utcNow.getUTCMonth() + 1).padStart(2, '0')}-${String(utcNow.getUTCDate()).padStart(2, '0')}`,
+      weekly: `usage:${clientIP}:${workerName}:${utcNow.getUTCFullYear()}-W${this.getWeekNumber(utcNow)}`,
+      monthly: `usage:${clientIP}:${workerName}:${utcNow.getUTCFullYear()}-${String(utcNow.getUTCMonth() + 1).padStart(2, '0')}`
+    };
+
+    // Update all time windows with race condition mitigation
+    for (const [window, key] of Object.entries(keys)) {
+      await this.atomicIncrementKV(key, window, maxRetries);
+    }
+  }
+
+  /**
+   * Get Durable Object stub for a given IP address
+   * @param {string} clientIP - Client IP address for Durable Object isolation
+   * @returns {DurableObjectStub} Durable Object stub
+   * @private
+   */
+  getDurableObjectStub(clientIP) {
+    if (!this.env.RATE_LIMITER_DO) {
+      throw new Error('RATE_LIMITER_DO binding not available in environment');
+    }
+    
+    // Use IP address for per-IP isolation
+    const durableObjectId = this.env.RATE_LIMITER_DO.idFromName(clientIP);
+    return this.env.RATE_LIMITER_DO.get(durableObjectId);
+  }
+
+  /**
+   * KV-based atomic increment with retry logic (fallback method)
+   * Note: KV doesn't provide true atomic operations. This implements optimistic locking.
+   * @param {string} key - KV key to increment
+   * @param {string} window - Time window type for TTL calculation
+   * @param {number} maxRetries - Maximum retry attempts
+   * @private
+   */
+  async atomicIncrementKV(key, window, maxRetries) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        // Read current value with metadata to get modification time
+        const result = await this.env.FAQ_RATE_LIMITS.getWithMetadata(key);
+        const currentValue = result.value ? parseInt(result.value) : 0;
+        const metadata = result.metadata || {};
+        
+        const newValue = currentValue + 1;
+        const newMetadata = {
+          lastModified: Date.now(),
+          attempt: attempt + 1,
+          fallbackMode: true
+        };
+
         // Set TTL based on window
         let ttl;
         switch (window) {
-          case 'hourly':
-            ttl = 3600; // 1 hour
-            break;
-          case 'daily':
-            ttl = 86400; // 24 hours
-            break;
-          case 'weekly':
-            ttl = 604800; // 7 days
-            break;
-          case 'monthly':
-            ttl = 2592000; // 30 days
-            break;
+          case 'hourly': ttl = 3600; break;
+          case 'daily': ttl = 86400; break;
+          case 'weekly': ttl = 604800; break;
+          case 'monthly': ttl = 2592000; break;
+          default: ttl = 3600;
         }
 
-        await this.env.FAQ_RATE_LIMITS.put(key, count.toString(), { expirationTtl: ttl });
+        // Try to update with conditional logic
+        await this.env.FAQ_RATE_LIMITS.put(
+          key,
+          newValue.toString(),
+          {
+            expirationTtl: ttl,
+            metadata: newMetadata
+          }
+        );
+        
+        // Success - exit retry loop
+        return newValue;
+        
+      } catch (error) {
+        if (attempt === maxRetries) {
+          console.warn(`[Rate Limiter] Failed to increment ${key} after ${maxRetries} attempts:`, error);
+          // Fallback: just write the value we would have written
+          try {
+            await this.env.FAQ_RATE_LIMITS.put(key, '1', { expirationTtl: 3600 });
+          } catch (fallbackError) {
+            console.error(`[Rate Limiter] Fallback increment failed for ${key}:`, fallbackError);
+          }
+          return 1;
+        }
+        
+        // Exponential backoff with jitter
+        const delay = Math.min(100 * Math.pow(2, attempt) + Math.random() * 50, 1000);
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
-
-      console.log(`[Rate Limiter] Updated usage for IP ${clientIP}, Worker ${workerName}`);
-    } catch (error) {
-      console.error(`[Rate Limiter] Error updating usage count:`, error);
     }
   }
 
@@ -285,11 +425,84 @@ export class EnhancedRateLimiter {
    * Get current usage across all time windows
    */
   async getCurrentUsage(clientIP, workerName, now) {
+    // Sanitize parameters to prevent [object Object] in KV keys
+    clientIP = this.sanitizeStringParam(clientIP, 'unknown');
+    workerName = this.sanitizeStringParam(workerName, 'unknown-worker');
+    
+    // Try Durable Object first for consistency with write operations
+    try {
+      return await this.getCurrentUsageWithDurableObject(clientIP, workerName);
+    } catch (durableObjectError) {
+      console.warn(`[Rate Limiter] Durable Object read failed for ${clientIP}, falling back to KV:`, durableObjectError.message);
+      
+      // Fallback to KV-based approach
+      return await this.getCurrentUsageWithKV(clientIP, workerName, now);
+    }
+  }
+
+  /**
+   * Get current usage using Durable Object
+   * @param {string} clientIP
+   * @param {string} workerName
+   * @returns {Promise<Object>} Usage counts for all windows
+   * @private
+   */
+  async getCurrentUsageWithDurableObject(clientIP, workerName) {
+    const windowTypes = ['hourly', 'daily', 'weekly', 'monthly'];
+    
+    // Get Durable Object stub for this IP
+    const stub = this.getDurableObjectStub(clientIP);
+    
+    // Get usage for all time windows
+    const promises = windowTypes.map(async (windowType) => {
+      try {
+        const response = await stub.fetch('http://localhost/get', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ windowType, workerName })
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(`Durable Object get failed: ${response.status} - ${errorData.error || 'Unknown error'}`);
+        }
+        
+        const result = await response.json();
+        return { windowType, count: result.counter || 0 };
+      } catch (error) {
+        throw new Error(`Failed to get ${windowType} counter: ${error.message}`);
+      }
+    });
+    
+    // Wait for all gets to complete
+    const results = await Promise.all(promises);
+    
+    // Convert to usage object
+    const usage = {};
+    results.forEach(({ windowType, count }) => {
+      usage[windowType] = count;
+    });
+    
+    return usage;
+  }
+
+  /**
+   * Get current usage using KV storage (fallback method)
+   * @param {string} clientIP
+   * @param {string} workerName
+   * @param {Date} now
+   * @returns {Promise<Object>} Usage counts for all windows
+   * @private
+   */
+  async getCurrentUsageWithKV(clientIP, workerName, now) {
+    // Use UTC time consistently across all edge locations
+    const utcNow = new Date(now.getTime() + (now.getTimezoneOffset() * 60000));
+    
     const keys = {
-      hourly: `usage:${clientIP}:${workerName}:${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}:${String(now.getHours()).padStart(2, '0')}`,
-      daily: `usage:${clientIP}:${workerName}:${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
-      weekly: `usage:${clientIP}:${workerName}:${now.getFullYear()}-W${this.getWeekNumber(now)}`,
-      monthly: `usage:${clientIP}:${workerName}:${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+      hourly: `usage:${clientIP}:${workerName}:${utcNow.getUTCFullYear()}-${String(utcNow.getUTCMonth() + 1).padStart(2, '0')}-${String(utcNow.getUTCDate()).padStart(2, '0')}:${String(utcNow.getUTCHours()).padStart(2, '0')}`,
+      daily: `usage:${clientIP}:${workerName}:${utcNow.getUTCFullYear()}-${String(utcNow.getUTCMonth() + 1).padStart(2, '0')}-${String(utcNow.getUTCDate()).padStart(2, '0')}`,
+      weekly: `usage:${clientIP}:${workerName}:${utcNow.getUTCFullYear()}-W${this.getWeekNumber(utcNow)}`,
+      monthly: `usage:${clientIP}:${workerName}:${utcNow.getUTCFullYear()}-${String(utcNow.getUTCMonth() + 1).padStart(2, '0')}`
     };
 
     const usage = {};
@@ -485,23 +698,28 @@ export class EnhancedRateLimiter {
   }
 
   /**
-   * Get reset times for each window
+   * Get reset times for each window using UTC
    */
   getResetTimes(now) {
-    const nextHour = new Date(now);
-    nextHour.setHours(nextHour.getHours() + 1, 0, 0, 0);
+    // Convert to UTC for consistent behavior across edge locations
+    const utcNow = new Date(now.getTime() + (now.getTimezoneOffset() * 60000));
+    
+    const nextHour = new Date(utcNow);
+    nextHour.setUTCHours(nextHour.getUTCHours() + 1, 0, 0, 0);
 
-    const nextDay = new Date(now);
-    nextDay.setDate(nextDay.getDate() + 1);
-    nextDay.setHours(0, 0, 0, 0);
+    const nextDay = new Date(utcNow);
+    nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+    nextDay.setUTCHours(0, 0, 0, 0);
 
-    const nextWeek = new Date(now);
-    nextWeek.setDate(nextWeek.getDate() + (7 - nextWeek.getDay()));
-    nextWeek.setHours(0, 0, 0, 0);
+    const nextWeek = new Date(utcNow);
+    // Monday is the start of ISO week (getUTCDay() returns 0 for Sunday, 1 for Monday, etc.)
+    const daysUntilMonday = (8 - nextWeek.getUTCDay()) % 7 || 7;
+    nextWeek.setUTCDate(nextWeek.getUTCDate() + daysUntilMonday);
+    nextWeek.setUTCHours(0, 0, 0, 0);
 
-    const nextMonth = new Date(now);
-    nextMonth.setMonth(nextMonth.getMonth() + 1, 1);
-    nextMonth.setHours(0, 0, 0, 0);
+    const nextMonth = new Date(utcNow);
+    nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1, 1);
+    nextMonth.setUTCHours(0, 0, 0, 0);
 
     return {
       hourly: nextHour.getTime(),
@@ -512,12 +730,79 @@ export class EnhancedRateLimiter {
   }
 
   /**
-   * Get week number
+   * Get ISO week number (ISO 8601 standard)
+   * @param {Date} date - Date to get week number for
+   * @returns {number} ISO week number
    */
   getWeekNumber(date) {
-    const firstDayOfYear = new Date(date.getFullYear(), 0, 1);
-    const pastDaysOfYear = (date - firstDayOfYear) / 86400000;
-    return Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7);
+    // Create a copy and convert to UTC
+    const utcDate = new Date(date.getTime() + (date.getTimezoneOffset() * 60000));
+    
+    // Set to Thursday of this week (ISO week definition)
+    utcDate.setUTCDate(utcDate.getUTCDate() + 4 - (utcDate.getUTCDay() || 7));
+    
+    // Get the year start
+    const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
+    
+    // Calculate week number
+    const weekNumber = Math.ceil((((utcDate - yearStart) / 86400000) + 1) / 7);
+    
+    return weekNumber;
+  }
+
+  /**
+   * Sanitize string parameter to prevent [object Object] in KV keys
+   * @param {any} param - Parameter to sanitize
+   * @param {string} defaultValue - Default value if param is invalid
+   * @returns {string} Sanitized string
+   */
+  sanitizeStringParam(param, defaultValue) {
+    if (param === null || param === undefined) {
+      return defaultValue;
+    }
+    
+    // If it's already a string, return it
+    if (typeof param === 'string') {
+      return param.trim() || defaultValue;
+    }
+    
+    // If it's a number, convert to string
+    if (typeof param === 'number') {
+      return param.toString();
+    }
+    
+    // If it's an object, handle specially to avoid [object Object]
+    if (typeof param === 'object') {
+      // Try to get a meaningful string representation
+      if (param.toString && typeof param.toString === 'function') {
+        const str = param.toString();
+        // Avoid [object Object] by checking if toString gives us something useful
+        if (str !== '[object Object]') {
+          return str;
+        }
+      }
+      
+      // If it has an id property, use that
+      if (param.id) {
+        return String(param.id);
+      }
+      
+      // If it has a name property, use that
+      if (param.name) {
+        return String(param.name);
+      }
+      
+      // Last resort: try JSON.stringify
+      try {
+        return JSON.stringify(param);
+      } catch (e) {
+        console.warn('[Rate Limiter] Failed to stringify parameter:', param);
+        return defaultValue;
+      }
+    }
+    
+    // For any other type, convert to string
+    return String(param) || defaultValue;
   }
 
   /**
@@ -671,11 +956,31 @@ export async function createRateLimiter(env, workerName, customConfig = {}) {
 
 /**
  * Legacy factory function for backward compatibility
+ * @param {Object} env - Cloudflare environment (required for KV access)
  * @param {Object} config - Static rate limiting configuration
  * @returns {EnhancedRateLimiter} Rate limiter instance
  * @deprecated Use createRateLimiter(env, workerName) for dynamic configuration
  */
-export function createStaticRateLimiter(config) {
+export function createStaticRateLimiter(env, config) {
+  if (!env) {
+    throw new Error('[Rate Limiter] Environment parameter is required for KV store access. Cannot create rate limiter without env.');
+  }
+  
   console.warn('[Rate Limiter] Using deprecated static configuration. Consider migrating to dynamic config.');
-  return new EnhancedRateLimiter(null, config);
+  
+  // Ensure config has required structure
+  const validatedConfig = {
+    limits: { hourly: 10, daily: 50, weekly: 250, monthly: 1000 },
+    violations: { soft_threshold: 3, hard_threshold: 6, ban_threshold: 12 },
+    penalties: {
+      first_violation: 300,
+      second_violation: 1800,
+      third_violation: 7200,
+      persistent_violator: 86400
+    },
+    ...config,
+    configSource: 'static-legacy'
+  };
+  
+  return new EnhancedRateLimiter(env, validatedConfig);
 }

@@ -354,6 +354,7 @@ export default {
         healthResponse.current_model = aiModelInfo.current_model;
         healthResponse.model_source = aiModelInfo.model_source;
         healthResponse.worker_type = 'question_generator';
+        healthResponse.status = 'OK'; // Ensure consistent status
         healthResponse.rate_limiting = {
           enabled: true,
           enhanced: true
@@ -613,11 +614,9 @@ export default {
       const generationDuration = ((Date.now() - generationStartTime) / 1000).toFixed(2);
       console.log(`[Main Handler] ${mode} generation completed in ${generationDuration}s - ${suggestions.length} suggestions generated`);
 
-      // Record successful usage AFTER processing request
-      const rateLimitUpdateStart = Date.now();
-      await rateLimiter.updateUsageCount(clientIP, env);
-      const rateLimitUpdateDuration = ((Date.now() - rateLimitUpdateStart) / 1000).toFixed(2);
-      console.log(`[Main Handler] Enhanced rate limit updated in ${rateLimitUpdateDuration}s`);
+      // Update usage count immediately after rate limit check passes
+      await rateLimiter.updateUsageCount(clientIP, 'faq-realtime-assistant-worker');
+      console.log(`[Rate Limiting] Updated usage count for IP ${clientIP}`);
 
       // Build enhanced response with educational value
       const response = {

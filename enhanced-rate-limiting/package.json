@@ -1,0 +1,41 @@
+{
+  "name": "enhanced-rate-limiting-tests",
+  "version": "1.0.0",
+  "description": "Test suite for Durable Object-based rate limiting implementation",
+  "type": "module",
+  "main": "test-durable-object-rate-limiter.js",
+  "scripts": {
+    "test": "node run-tests.js",
+    "test:verbose": "node run-tests.js --verbose",
+    "test:integration": "node run-tests.js --suite=integration",
+    "test:race-condition": "node run-tests.js --suite=race-condition",
+    "test:fallback": "node run-tests.js --suite=fallback",
+    "test:compatibility": "node run-tests.js --suite=compatibility",
+    "test:factory": "node run-tests.js --suite=factory",
+    "test:end-to-end": "node run-tests.js --suite=end-to-end",
+    "test:direct": "node test-durable-object-rate-limiter.js"
+  },
+  "keywords": [
+    "rate-limiting",
+    "durable-objects",
+    "cloudflare-workers",
+    "testing",
+    "race-conditions",
+    "atomicity"
+  ],
+  "author": "365i AI FAQ Generator System",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {},
+  "dependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BSolveIT/plugins"
+  },
+  "bugs": {
+    "url": "https://github.com/BSolveIT/plugins/issues"
+  },
+  "homepage": "https://github.com/BSolveIT/plugins#readme"
+}

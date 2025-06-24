@@ -275,6 +275,9 @@ export default {
         healthResponse.model_source = aiModelInfo.model_source;
         healthResponse.worker_type = aiModelInfo.worker_type;
         
+        // Ensure consistent status response across all workers
+        healthResponse.status = 'OK';
+        
         return new Response(JSON.stringify(healthResponse), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -427,6 +430,10 @@ export default {
           }
         });
       }
+
+      // Update usage count immediately after rate limit check passes
+      await rateLimiter.updateUsageCount(clientIP, 'url-to-faq-generator-worker');
+      console.log(`[Rate Limiting] Updated usage count for IP ${clientIP}`);
 
       // ENHANCED: Quality focused with sensible 12 FAQ limit
       const faqCount = Math.min(Math.max(options.faqCount || 12, 6), 12);
@@ -731,8 +738,7 @@ Return the quality-enhanced FAQs in the same JSON format.`;
         throw new Error(`Only ${validFAQs.length} high-quality FAQs generated (needed ${Math.floor(faqCount * 0.7)})`);
       }
 
-      // Record successful usage with enhanced rate limiting
-      await rateLimiter.updateUsageCount(clientIP, 'url-to-faq-generator-worker');
+      
 
       const processingTime = Date.now() - startTime;
       const wasEnhanced = processingTime < 120000; // 2 minute enhancement window

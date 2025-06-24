@@ -32,5 +32,14 @@
       "binding": "FAQ_ANALYTICS",
       "id": "a3573648cc1d4c1990a06090dab3e646"
     }
-  ]
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RATE_LIMITER_DO",
+        "class_name": "RateLimiterDO",
+        "script_name": "rate-limiter-do"
+      }
+    ]
+  }
 }

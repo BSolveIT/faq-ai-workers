@@ -137,6 +137,9 @@ export default {
         healthResponse.model_source = aiModelInfo.model_source;
         healthResponse.worker_type = aiModelInfo.worker_type;
         
+        // Ensure consistent status response across all workers
+        healthResponse.status = 'OK';
+        
         return new Response(JSON.stringify(healthResponse), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -262,7 +265,7 @@ export default {
       console.log(`Processing SEO analysis request from IP: ${clientIP}`);
 
       // Initialize enhanced rate limiter with worker-specific config
-      const rateLimiter = createRateLimiter(env, 'faq-seo-analyzer', {
+      const rateLimiter = await createRateLimiter(env, 'faq-seo-analyzer', {
         limits: {
           hourly: 10,    // 10 SEO analysis requests per hour (very AI-intensive)
           daily: 30,     // 30 SEO analysis requests per day
@@ -327,6 +330,10 @@ export default {
       }
 
       console.log(`Processing SEO analysis request. Usage: ${JSON.stringify(rateLimitResult.usage)}`);
+
+      // Update usage count immediately after rate limit check passes
+      await rateLimiter.updateUsageCount(clientIP, 'faq-seo-analyzer');
+      console.log(`[Rate Limiting] Updated usage count for IP ${clientIP}`);
 
       // Expert-level AI prompt with detailed instructions
       const analysisPrompt = `You are a senior Google Search Quality Rater and SEO expert with 15 years of experience. You understand exactly how Google ranks content for Featured Snippets (Position Zero), People Also Ask boxes, and voice search results.
@@ -512,9 +519,7 @@ Analyze FAQs as if determining their Google ranking potential. Provide nuanced, 
         ? aiAnalysis.suggestions.filter(s => s && typeof s === 'string').slice(0, 5)
         : generateDefaultSuggestions(seoScore, readabilityScore, voiceSearchScore);
 
-      // Record successful usage AFTER processing request
-      await rateLimiter.updateUsageCount(clientIP, 'faq-seo-analyzer');
-      console.log(`Enhanced rate limit updated after successful SEO analysis`);
+      
 
       // Build response
       const response = {

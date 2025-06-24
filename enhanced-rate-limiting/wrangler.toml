@@ -1,0 +1,16 @@
+name = "rate-limiter-do"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+[[durable_objects.bindings]]
+name = "RATE_LIMITER_DO"
+class_name = "RateLimiterDO"
+
+[durable_objects]
+classes = [
+  { binding = "RATE_LIMITER_DO", class_name = "RateLimiterDO" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = [ "RateLimiterDO" ]

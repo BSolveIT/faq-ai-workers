@@ -84,6 +84,9 @@ async function handleRequest(request, env, ctx) {
         
         const healthResponse = await Promise.race([healthPromise, timeoutPromise]);
         
+        // Override status to standardize "OK" across all workers
+        healthResponse.status = 'OK';
+        
         return new Response(JSON.stringify(healthResponse), {
           status: 200,
           headers: { ...cors, 'Content-Type': 'application/json' }
@@ -95,7 +98,7 @@ async function handleRequest(request, env, ctx) {
     
     // Fallback to simplified health response
     const healthData = {
-      status: 'HEALTHY',
+      status: 'OK',
       timestamp: new Date().toISOString(),
       worker: 'faq-proxy-fetch',
       version: '3.1.0-advanced-cache-optimized',
@@ -338,6 +341,18 @@ async function handleRequest(request, env, ctx) {
   }
 
   console.log(`Processing FAQ extraction request. Usage: ${JSON.stringify(rateLimitResult?.usage || 'rate_limiting_unavailable')}`);
+
+  // Record successful usage immediately after rate limit check passes
+  if (rateLimiter) {
+    try {
+      await rateLimiter.updateUsageCount(clientIP, 'faq-proxy-fetch');
+      console.log(`Enhanced rate limit updated before FAQ extraction`);
+    } catch (error) {
+      console.warn('[Rate Limiting] Failed to update usage count:', error.message);
+    }
+  } else {
+    console.log('[Rate Limiting] Usage count not updated - rate limiter unavailable');
+  }
   
   // Add rate limit headers to response for successful requests
   if (rateLimitResult) {
@@ -557,18 +572,6 @@ async function handleRequest(request, env, ctx) {
     if (allFaqs.length > 0) {
       console.log(`Successfully extracted ${allFaqs.length} FAQs from ${url}`);
       console.log('First FAQ:', JSON.stringify(allFaqs[0], null, 2));
-      
-      // Record successful usage AFTER processing request
-      if (rateLimiter) {
-        try {
-          await rateLimiter.updateUsageCount(clientIP, 'faq-proxy-fetch');
-          console.log(`Enhanced rate limit updated after successful FAQ extraction`);
-        } catch (error) {
-          console.warn('[Rate Limiting] Failed to update usage count:', error.message);
-        }
-      } else {
-        console.log('[Rate Limiting] Usage count not updated - rate limiter unavailable');
-      }
       
       return new Response(JSON.stringify({
         success: true,

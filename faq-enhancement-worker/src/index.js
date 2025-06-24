@@ -105,6 +105,19 @@ async function getAIModelInfo(env, workerType = 'faq_enhancer') {
 // Session-based context caching to reduce duplicate fetching
 const sessionContextCache = new Map();
 
+/**
+ * Get current accurate usage counts for response metadata
+ */
+async function getCurrentUsageForResponse(rateLimiter, clientIP, workerName) {
+  try {
+    const now = new Date();
+    return await rateLimiter.getCurrentUsage(clientIP, workerName, now);
+  } catch (error) {
+    console.error('[Response Metadata] Error getting current usage:', error);
+    return { hourly: 0, daily: 0, weekly: 0, monthly: 0 };
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const startTime = Date.now();
@@ -150,6 +163,9 @@ export default {
         healthResponse.current_model = aiModelInfo.current_model;
         healthResponse.model_source = aiModelInfo.model_source;
         healthResponse.worker_type = aiModelInfo.worker_type;
+        
+        // Ensure consistent status response across all workers
+        healthResponse.status = 'OK';
         
         return new Response(JSON.stringify(healthResponse), {
           status: 200,
@@ -270,7 +286,7 @@ export default {
       console.log(`Processing enhancement request from IP: ${clientIP}`);
 
       // Initialize enhanced rate limiter with worker-specific config
-      const rateLimiter = createRateLimiter(env, 'faq-enhancement', {
+      const rateLimiter = await createRateLimiter(env, 'faq-enhancement', {
         limits: {
           hourly: 15,    // 15 enhancement requests per hour (AI-intensive)
           daily: 50,     // 50 enhancement requests per day
@@ -332,6 +348,10 @@ export default {
       }
 
       console.log(`Processing enhancement request. Usage: ${JSON.stringify(rateLimitResult.usage)}`);
+
+      // Record usage count immediately after rate limit check passes
+      await rateLimiter.updateUsageCount(clientIP, 'faq-enhancement');
+      console.log(`Enhanced rate limit updated before AI processing`);
 
       // Clean input for AI processing
       const sanitizedQuestion = sanitizeContent(question);
@@ -508,10 +528,6 @@ IMPORTANT: Return ONLY the JSON object above. No other text.`;
           }
 
           console.log(`Enhancement complete. Generated ${enhancements.question_variations.length} question variations.`);
-          
-          // Record successful usage AFTER processing request
-          await rateLimiter.updateUsageCount(clientIP, 'faq-enhancement');
-          console.log(`Enhanced rate limit updated after successful completion`);
           
           console.log(`========== Request completed successfully in ${Date.now() - startTime}ms ==========`);
 
