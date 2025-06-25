@@ -9,12 +9,17 @@
     "head_sampling_rate": 0.01
   },
   
-  // KV namespace for rate limiting (same as legacy worker)
+  // KV namespaces for FREE rate limiting and caching
   "kv_namespaces": [
     {
       "binding": "FAQ_RATE_LIMITS",
       "id": "77fcd59503e34efcaf4d77d1a550433b",
       "preview_id": "77fcd59503e34efcaf4d77d1a550433b"
+    },
+    {
+      "binding": "FAQ_CACHE",
+      "id": "8a2d095ab02947408cbf81e70a3e7f8a",
+      "preview_id": "8a2d095ab02947408cbf81e70a3e7f8a"
     },
     {
       "binding": "FAQ_IP_WHITELIST",
@@ -32,14 +37,5 @@
       "binding": "FAQ_ANALYTICS",
       "id": "a3573648cc1d4c1990a06090dab3e646"
     }
-  ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "RATE_LIMITER_DO",
-        "class_name": "RateLimiterDO",
-        "script_name": "rate-limiter-do"
-      }
-    ]
-  }
+  ]
 }

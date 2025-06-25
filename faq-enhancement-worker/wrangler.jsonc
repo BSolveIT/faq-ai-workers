@@ -36,20 +36,11 @@
       "id": "e4a2fb4ce24949e3bac458c4176dfecd"
     }
   ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "RATE_LIMITER_DO",
-        "class_name": "RateLimiterDO",
-        "script_name": "rate-limiter-do"
-      }
-    ]
-  },
   "vars": {
-    "WORKER_VERSION": "3.0.0-speed-optimized",
+    "WORKER_VERSION": "3.1.0-kv-rate-limited",
     "MODEL_NAME": "llama-3.1-8b-instruct",
-    "FEATURE_SET": "comprehensive-faq-enhancement-2-answers",
-    "DAILY_LIMIT": "50",
+    "FEATURE_SET": "comprehensive-faq-enhancement-2-answers-kv-rate-limited",
+    "DAILY_LIMIT": "25",
     "NODE_ENV": "production"
   }
 }

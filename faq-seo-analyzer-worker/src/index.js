@@ -1,9 +1,55 @@
-// SEO Analyzer Worker - AI-Powered with Expert-Level Analysis and Enhanced Rate Limiting
+// SEO Analyzer Worker - AI-Powered with Expert-Level Analysis and KV-Based Rate Limiting
 // Uses dynamic AI model configuration from WordPress admin interface
 
-import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
 import { generateDynamicHealthResponse, trackCacheHit, trackCacheMiss } from '../../shared/health-utils.js';
 import { cacheAIModelConfig, invalidateWorkerCaches, initializeCacheManager } from '../../shared/advanced-cache-manager.js';
+
+// Rate limiting utilities - FREE KV-based implementation
+const rateLimitCache = new Map();
+const CACHE_TTL = 60000; // 1 minute cache
+
+async function checkRateLimit(env, clientIP, config = {}) {
+  const limit = config.limit || 100; // Default: 100 requests per hour
+  const window = config.window || 3600; // Default: 1 hour
+  const now = Date.now();
+  const key = `rl:${clientIP}`;
+  
+  // Check cache first to reduce KV reads
+  const cached = rateLimitCache.get(clientIP);
+  if (cached && cached.expires > now) {
+    return { allowed: !cached.blocked, remaining: cached.remaining || 0 };
+  }
+  
+  try {
+    const data = await env.FAQ_RATE_LIMITS.get(key, { type: 'json' }) || { count: 0, windowStart: now };
+    
+    // Reset window if expired
+    if (now - data.windowStart > window * 1000) {
+      data.count = 0;
+      data.windowStart = now;
+    }
+    
+    // Check if rate limited
+    if (data.count >= limit) {
+      rateLimitCache.set(clientIP, { blocked: true, remaining: 0, expires: now + CACHE_TTL });
+      return { allowed: false, remaining: 0 };
+    }
+    
+    // Increment counter
+    data.count++;
+    await env.FAQ_RATE_LIMITS.put(key, JSON.stringify(data), {
+      expirationTtl: window * 2 // Auto-cleanup after 2x window
+    });
+    
+    const remaining = limit - data.count;
+    rateLimitCache.set(clientIP, { blocked: false, remaining, expires: now + CACHE_TTL });
+    return { allowed: true, remaining };
+    
+  } catch (error) {
+    console.error('Rate limit check failed:', error);
+    return { allowed: true, remaining: -1 }; // Fail open
+  }
+}
 
 /**
  * Get AI model name dynamically from KV store with enhanced caching
@@ -98,6 +144,55 @@ async function getAIModelInfo(env, workerType = 'seo_analyzer') {
   };
 }
 
+/**
+ * Extract JSON from AI response with better error handling
+ */
+function extractJSONFromResponse(responseText) {
+  if (!responseText || typeof responseText !== 'string') {
+    throw new Error('Invalid response text');
+  }
+  
+  // First try to parse the entire response as JSON
+  try {
+    return JSON.parse(responseText);
+  } catch (e) {
+    // Continue to regex extraction
+  }
+  
+  // Try to find JSON object with balanced braces
+  let depth = 0;
+  let startIndex = -1;
+  let endIndex = -1;
+  
+  for (let i = 0; i < responseText.length; i++) {
+    if (responseText[i] === '{' && startIndex === -1) {
+      startIndex = i;
+      depth = 1;
+    } else if (startIndex !== -1) {
+      if (responseText[i] === '{') {
+        depth++;
+      } else if (responseText[i] === '}') {
+        depth--;
+        if (depth === 0) {
+          endIndex = i + 1;
+          break;
+        }
+      }
+    }
+  }
+  
+  if (startIndex !== -1 && endIndex !== -1) {
+    const jsonString = responseText.substring(startIndex, endIndex);
+    try {
+      return JSON.parse(jsonString);
+    } catch (e) {
+      throw new Error('Found JSON-like structure but failed to parse: ' + e.message);
+    }
+  }
+  
+  throw new Error('No valid JSON found in response');
+}
+
 export default {
   async fetch(request, env, ctx) {
     // CORS headers
@@ -133,14 +228,15 @@ export default {
         
         // Add AI model information to health response
         const aiModelInfo = await getAIModelInfo(env, 'seo_analyzer');
-        healthResponse.current_model = aiModelInfo.current_model;
-        healthResponse.model_source = aiModelInfo.model_source;
-        healthResponse.worker_type = aiModelInfo.worker_type;
+        const responseData = typeof healthResponse === 'object' ? healthResponse : {};
+        responseData.current_model = aiModelInfo.current_model;
+        responseData.model_source = aiModelInfo.model_source;
+        responseData.worker_type = aiModelInfo.worker_type;
         
         // Ensure consistent status response across all workers
-        healthResponse.status = 'OK';
+        responseData.status = 'OK';
         
-        return new Response(JSON.stringify(healthResponse), {
+        return new Response(JSON.stringify(responseData), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
@@ -235,18 +331,49 @@ export default {
 
     try {
       // Parse request
-      const { question, answer, pageUrl } = await request.json();
+      let requestData;
+      try {
+        requestData = await request.json();
+      } catch (parseError) {
+        return new Response(JSON.stringify({
+          error: 'Invalid JSON in request body',
+          seoScore: 0,
+          readabilityScore: 0,
+          voiceSearchScore: 0
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+      
+      const { question, answer, pageUrl } = requestData;
       
       console.log('SEO Analysis Request:', { 
-        questionLength: question?.length, 
-        answerLength: answer?.length,
+        questionLength: question?.length || 0, 
+        answerLength: answer?.length || 0,
         pageUrl
       });
 
       // Validate input
-      if (!question || !answer) {
+      if (!question || !answer || typeof question !== 'string' || typeof answer !== 'string') {
         return new Response(JSON.stringify({
-          error: 'Question and answer are required',
+          error: 'Question and answer are required and must be strings',
+          seoScore: 0,
+          readabilityScore: 0,
+          voiceSearchScore: 0
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+      
+      // Trim and check for empty strings
+      const trimmedQuestion = question.trim();
+      const trimmedAnswer = answer.trim();
+      
+      if (!trimmedQuestion || !trimmedAnswer) {
+        return new Response(JSON.stringify({
+          error: 'Question and answer cannot be empty',
           seoScore: 0,
           readabilityScore: 0,
           voiceSearchScore: 0
@@ -264,83 +391,40 @@ export default {
 
       console.log(`Processing SEO analysis request from IP: ${clientIP}`);
 
-      // Initialize enhanced rate limiter with worker-specific config
-      const rateLimiter = await createRateLimiter(env, 'faq-seo-analyzer', {
-        limits: {
-          hourly: 10,    // 10 SEO analysis requests per hour (very AI-intensive)
-          daily: 30,     // 30 SEO analysis requests per day
-          weekly: 150,   // 150 SEO analysis requests per week
-          monthly: 600   // 600 SEO analysis requests per month
-        },
-        violations: {
-          soft_threshold: 3,    // Warning after 3 violations
-          hard_threshold: 5,    // Block after 5 violations
-          ban_threshold: 10     // Permanent ban after 10 violations
-        }
-      });
+      // Check rate limit before processing request - SEO analysis specific limits
+      let rateLimitConfig = { limit: 20, window: 3600 }; // 20 SEO analyses per hour
 
-      // Check rate limiting BEFORE processing request
-      const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, request, 'faq-seo-analyzer');
-      
-      console.log(`[Rate Limiting] Check completed in ${rateLimitResult.duration}s - Allowed: ${rateLimitResult.allowed}`);
+      const rateLimitResult = await checkRateLimit(env, clientIP, rateLimitConfig);
 
       if (!rateLimitResult.allowed) {
-        console.warn(`[Rate Limiting] Request blocked for IP ${clientIP} - Reason: ${rateLimitResult.reason}`);
-        
-        // Return appropriate error response based on reason
-        let statusCode = 429;
-        let errorMessage = 'Rate limit exceeded';
-        
-        switch (rateLimitResult.reason) {
-          case 'IP_BLACKLISTED':
-            statusCode = 403;
-            errorMessage = 'Access denied - IP address is blacklisted';
-            break;
-          case 'GEO_RESTRICTED':
-            statusCode = 403;
-            errorMessage = `Access denied - Geographic restrictions apply (${rateLimitResult.country})`;
-            break;
-          case 'TEMPORARILY_BLOCKED':
-            statusCode = 429;
-            errorMessage = `Temporarily blocked due to violations. Try again in ${Math.ceil(rateLimitResult.remaining_time / 60)} minutes`;
-            break;
-          case 'RATE_LIMIT_EXCEEDED':
-            statusCode = 429;
-            errorMessage = 'SEO analysis rate limit exceeded. Please try again later';
-            break;
-        }
-
         return new Response(JSON.stringify({
-          error: errorMessage,
+          error: 'Rate limit exceeded. Please try again later.',
+          retryAfter: 3600,
           message: 'SEO analysis requests are rate limited to prevent abuse',
           seoScore: 0,
           readabilityScore: 0,
           voiceSearchScore: 0,
-          rateLimited: true,
-          reason: rateLimitResult.reason,
-          usage: rateLimitResult.usage,
-          limits: rateLimitResult.limits,
-          reset_times: rateLimitResult.reset_times,
-          block_expires: rateLimitResult.block_expires,
-          remaining_time: rateLimitResult.remaining_time
+          rateLimited: true
         }), {
-          status: statusCode,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          status: 429,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+            'Retry-After': '3600',
+            'X-RateLimit-Limit': '20',
+            'X-RateLimit-Remaining': rateLimitResult.remaining.toString()
+          }
         });
       }
 
-      console.log(`Processing SEO analysis request. Usage: ${JSON.stringify(rateLimitResult.usage)}`);
-
-      // Update usage count immediately after rate limit check passes
-      await rateLimiter.updateUsageCount(clientIP, 'faq-seo-analyzer');
-      console.log(`[Rate Limiting] Updated usage count for IP ${clientIP}`);
+      console.log(`Processing SEO analysis request from IP: ${clientIP}, remaining: ${rateLimitResult.remaining}`);
 
       // Expert-level AI prompt with detailed instructions
       const analysisPrompt = `You are a senior Google Search Quality Rater and SEO expert with 15 years of experience. You understand exactly how Google ranks content for Featured Snippets (Position Zero), People Also Ask boxes, and voice search results.
 
 ANALYZE THIS FAQ:
-Question: "${question}"
-Answer: "${answer}"
+Question: "${trimmedQuestion}"
+Answer: "${trimmedAnswer}"
 ${pageUrl ? `Page URL: ${pageUrl}` : ''}
 
 YOUR TASK: Score this FAQ for its potential to rank in Google Search, win Featured Snippets, and appear in AI-generated answers.
@@ -494,32 +578,25 @@ Analyze FAQs as if determining their Google ranking potential. Provide nuanced, 
       // Parse AI response
       let aiAnalysis;
       try {
-        // Extract JSON from response
-        const jsonMatch = aiResponse.response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          aiAnalysis = JSON.parse(jsonMatch[0]);
-        } else {
-          throw new Error('No JSON found in AI response');
-        }
+        // Extract JSON from response with better handling
+        aiAnalysis = extractJSONFromResponse(aiResponse.response);
       } catch (parseError) {
-        console.error('Failed to parse Llama 4 Scout 17B response:', parseError);
+        console.error(`Failed to parse ${aiModel} response:`, parseError);
         console.log('AI Response was:', aiResponse.response);
         
         // Fallback to enhanced algorithmic scoring with the data we have
-        return enhancedFallbackScoring(question, answer, pageUrl, corsHeaders);
+        return enhancedFallbackScoring(trimmedQuestion, trimmedAnswer, pageUrl, corsHeaders);
       }
 
       // Validate and sanitize scores
-      const seoScore = Math.max(0, Math.min(100, Math.round(aiAnalysis.seoScore || 50)));
-      const readabilityScore = Math.max(0, Math.min(100, Math.round(aiAnalysis.readabilityScore || 50)));
-      const voiceSearchScore = Math.max(0, Math.min(100, Math.round(aiAnalysis.voiceSearchScore || 50)));
+      const seoScore = Math.max(0, Math.min(100, Math.round(Number(aiAnalysis.seoScore) || 50)));
+      const readabilityScore = Math.max(0, Math.min(100, Math.round(Number(aiAnalysis.readabilityScore) || 50)));
+      const voiceSearchScore = Math.max(0, Math.min(100, Math.round(Number(aiAnalysis.voiceSearchScore) || 50)));
 
       // Ensure we have suggestions
       const suggestions = Array.isArray(aiAnalysis.suggestions) 
         ? aiAnalysis.suggestions.filter(s => s && typeof s === 'string').slice(0, 5)
         : generateDefaultSuggestions(seoScore, readabilityScore, voiceSearchScore);
-
-      
 
       // Build response
       const response = {
@@ -529,11 +606,11 @@ Analyze FAQs as if determining their Google ranking potential. Provide nuanced, 
         voiceSearchScore,
         suggestions,
         analysis: {
-          questionLength: question.length,
-          answerWordCount: answer.split(/\s+/).length,
-          featuredSnippetPotential: aiAnalysis.analysis?.featuredSnippetPotential ?? (answer.split(/[.!?]/)[0]?.length <= 300),
+          questionLength: trimmedQuestion.length,
+          answerWordCount: trimmedAnswer.split(/\s+/).filter(w => w.length > 0).length,
+          featuredSnippetPotential: aiAnalysis.analysis?.featuredSnippetPotential ?? (trimmedAnswer.split(/[.!?]/)[0]?.length <= 300),
           positionZeroReady: aiAnalysis.analysis?.positionZeroReady ?? (seoScore >= 90),
-          targetKeyword: aiAnalysis.analysis?.targetKeyword || extractMainKeyword(question),
+          targetKeyword: aiAnalysis.analysis?.targetKeyword || extractMainKeyword(trimmedQuestion),
           missingElements: aiAnalysis.analysis?.missingElements || [],
           aiPowered: true,
           model: aiModel,
@@ -542,12 +619,11 @@ Analyze FAQs as if determining their Google ranking potential. Provide nuanced, 
           reasoning: aiAnalysis.reasoning || null
         },
         rate_limiting: {
-          usage: rateLimitResult.usage,
-          limits: rateLimitResult.limits,
-          reset_times: rateLimitResult.reset_times,
+          remaining: rateLimitResult.remaining,
+          limit: rateLimitConfig.limit,
+          window: rateLimitConfig.window,
           worker: 'faq-seo-analyzer',
-          enhanced: true,
-          check_duration: rateLimitResult.duration
+          kv_based: true
         }
       };
 
@@ -562,7 +638,7 @@ Analyze FAQs as if determining their Google ranking potential. Provide nuanced, 
       
       // Return error response
       return new Response(JSON.stringify({
-        error: error.message,
+        error: error.message || 'An unexpected error occurred',
         seoScore: 0,
         readabilityScore: 0,
         voiceSearchScore: 0,
@@ -591,7 +667,8 @@ function enhancedFallbackScoring(question, answer, pageUrl, corsHeaders) {
   if (/^(what|how|why|when|where|who|which|can|does|is|are)/i.test(question)) seoScore += 15;
   
   // Answer quality (50 points)
-  const wordCount = answer.split(/\s+/).length;
+  const words = answer.split(/\s+/).filter(w => w.length > 0);
+  const wordCount = words.length;
   if (wordCount >= 40 && wordCount <= 100) seoScore += 20; // Optimal for featured snippets
   else if (wordCount >= 20 && wordCount <= 300) seoScore += 15;
   else if (wordCount > 10) seoScore += 5;
@@ -617,8 +694,8 @@ function enhancedFallbackScoring(question, answer, pageUrl, corsHeaders) {
   else readabilityScore += 10;
   
   // Simple language bonus
-  const complexWords = answer.split(/\s+/).filter(word => word.length > 7).length;
-  const complexityRatio = complexWords / Math.max(1, wordCount);
+  const complexWords = words.filter(word => word.length > 7).length;
+  const complexityRatio = wordCount > 0 ? complexWords / wordCount : 0;
   if (complexityRatio < 0.1) readabilityScore += 30;
   else if (complexityRatio < 0.2) readabilityScore += 20;
   else readabilityScore += 10;

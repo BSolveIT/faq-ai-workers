@@ -34,17 +34,12 @@
     {
       "binding": "AI_MODEL_CONFIG",
       "id": "e4a2fb4ce24949e3bac458c4176dfecd"
+    },
+    {
+      "binding": "FAQ_CACHE",
+      "id": "8a2d095ab02947408cbf81e70a3e7f8a"
     }
   ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "RATE_LIMITER_DO",
-        "class_name": "RateLimiterDO",
-        "script_name": "rate-limiter-do"
-      }
-    ]
-  },
   "limits": {
     "cpu_ms": 90000
   },

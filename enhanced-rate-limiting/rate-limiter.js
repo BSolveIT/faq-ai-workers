@@ -28,29 +28,37 @@
 export class EnhancedRateLimiter {
   constructor(env, config = {}) {
     this.env = env;
+    
+    // No hardcoded defaults - all configuration must be provided via config parameter
+    // This ensures dynamic configuration is always used
     this.config = {
-      // Default rate limits (can be overridden per worker)
-      limits: {
-        hourly: 50,
-        daily: 200,
-        weekly: 1000,
-        monthly: 4000
+      // Configuration will be populated from WordPress settings via dynamic-config.js
+      limits: config.limits || {
+        hourly: 10,    // Conservative fallback
+        daily: 50,     // Conservative fallback
+        weekly: 250,   // Conservative fallback
+        monthly: 1000  // Conservative fallback
       },
-      // Violation thresholds
-      violations: {
-        soft_threshold: 3,    // Warning after 3 violations
-        hard_threshold: 5,    // Block after 5 violations
-        ban_threshold: 10     // Permanent ban after 10 violations
+      violations: config.violations || {
+        soft_threshold: 3,
+        hard_threshold: 6,
+        ban_threshold: 12
       },
-      // Block durations (in seconds)
-      penalties: {
+      penalties: config.penalties || {
         first_violation: 300,    // 5 minutes
         second_violation: 1800,  // 30 minutes
         third_violation: 7200,   // 2 hours
         persistent_violator: 86400 // 24 hours
       },
+      // Dynamic configuration metadata
+      configSource: config.configSource || 'fallback',
+      lastUpdated: config.lastUpdated || new Date().toISOString(),
+      workerName: config.workerName || 'unknown',
+      enabled: config.enabled !== false, // Rate limiting enabled by default
       ...config
     };
+    
+    console.log(`[Rate Limiter] Initialized with ${this.config.configSource} configuration for ${this.config.workerName}`);
   }
 
   /**

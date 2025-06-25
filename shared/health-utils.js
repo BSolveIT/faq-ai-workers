@@ -3,16 +3,8 @@
  * EMERGENCY PRODUCTION FIX: Lightweight health responses with timeouts and fallbacks
  */
 
-// EMERGENCY: Import with fallback to prevent module import failures
-let dynamicConfigModule = null;
-try {
-  dynamicConfigModule = await import('../enhanced-rate-limiting/dynamic-config.js');
-} catch (error) {
-  console.warn('[Health Utils] Dynamic config module unavailable, using fallbacks');
-}
-
 /**
- * Performance metrics tracker
+ * Performance metrics tracker - per-request instance
  */
 class PerformanceTracker {
   constructor() {
@@ -72,8 +64,28 @@ class PerformanceTracker {
   }
 }
 
-// Global performance tracker
+// Create a global performance tracker instance
 const globalTracker = new PerformanceTracker();
+
+// Export the actual instance for compatibility
+export { globalTracker as performanceTracker };
+
+/**
+ * Lazy load dynamic config module
+ */
+let dynamicConfigModule = null;
+async function getDynamicConfigModule() {
+  if (dynamicConfigModule) return dynamicConfigModule;
+  
+  try {
+    dynamicConfigModule = await import('../enhanced-rate-limiting/dynamic-config.js');
+    console.log('[Health Utils] Dynamic config module loaded successfully');
+    return dynamicConfigModule;
+  } catch (error) {
+    console.warn('[Health Utils] Dynamic config module unavailable, using fallbacks:', error.message);
+    return null;
+  }
+}
 
 /**
  * EMERGENCY FIX: Generate lightweight health response with timeouts and circuit breakers
@@ -81,7 +93,7 @@ const globalTracker = new PerformanceTracker();
  * @param {Object} env - Cloudflare environment bindings
  * @param {string} version - Worker version
  * @param {Array} staticFeatures - Static feature list (non-dynamic features)
- * @returns {Object} Health response (lightweight or full depending on circuit breaker state)
+ * @returns {Promise<Object>} Health response (lightweight or full depending on circuit breaker state)
  */
 export async function generateDynamicHealthResponse(workerName, env, version, staticFeatures = []) {
   const startTime = Date.now();
@@ -194,13 +206,15 @@ async function generateFullHealthResponse(workerName, env, version, staticFeatur
   console.log(`[Health Diagnostic] Starting full health response for ${workerName}`);
   
   try {
-    // Load config with timeout protection
-    if (dynamicConfigModule) {
+    // Load dynamic config module
+    const dynamicConfigMod = await getDynamicConfigModule();
+    
+    if (dynamicConfigMod) {
       console.log(`[Health Diagnostic] Dynamic config module available, loading configs...`);
       const configPromise = Promise.all([
-        dynamicConfigModule.loadWorkerConfig(workerName, env),
-        dynamicConfigModule.getAIModelConfig(workerName, env),
-        dynamicConfigModule.performConfigHealthCheck(env)
+        dynamicConfigMod.loadWorkerConfig(workerName, env),
+        dynamicConfigMod.getAIModelConfig(workerName, env),
+        dynamicConfigMod.performConfigHealthCheck(env)
       ]);
       
       const configTimeout = new Promise((_, reject) =>
@@ -219,7 +233,7 @@ async function generateFullHealthResponse(workerName, env, version, staticFeatur
         
         // Use fallback configs
         workerConfig = { source: 'fallback', lastUpdated: new Date().toISOString() };
-        aiModelConfig = { model: '@cf/meta/llama-3.1-8b-instruct', maxTokens: 300, temperature: 0.2 };
+        aiModelConfig = { model: '@cf/meta/llama-4-scout-17b-16e-instruct', maxTokens: 800, temperature: 0.4 };
         healthCheck = { overallHealth: 'degraded' };
         
         console.log(`[Health Diagnostic] ⚠️ FALLBACK CONFIGS SET:`);
@@ -230,7 +244,7 @@ async function generateFullHealthResponse(workerName, env, version, staticFeatur
       console.log(`[Health Diagnostic] No dynamic config module available, using static fallbacks`);
       // No dynamic config available
       workerConfig = { source: 'static_fallback', lastUpdated: new Date().toISOString() };
-      aiModelConfig = { model: '@cf/meta/llama-3.1-8b-instruct', maxTokens: 300, temperature: 0.2 };
+      aiModelConfig = { model: '@cf/meta/llama-4-scout-17b-16e-instruct', maxTokens: 800, temperature: 0.4 };
       healthCheck = { overallHealth: 'healthy' };
       
       console.log(`[Health Diagnostic] Static fallback health check: ${healthCheck.overallHealth}`);
@@ -270,30 +284,54 @@ async function generateFullHealthResponse(workerName, env, version, staticFeatur
       console.log(`[Health Diagnostic] ✅ STATUS CONSISTENCY: External and internal indicators both show '${finalStatus}'`);
     }
     
+    // Calculate uptime percentage
+    const uptimePercentage = performanceMetrics.failed_requests > 0 
+      ? Math.round(((performanceMetrics.successful_requests || 0) / (performanceMetrics.total_requests || 1)) * 100)
+      : 100;
+    
+    // Calculate cache hit rate
+    const cacheHitRate = (performanceMetrics.cache_hits + performanceMetrics.cache_misses) > 0
+      ? Math.round((performanceMetrics.cache_hits / (performanceMetrics.cache_hits + performanceMetrics.cache_misses)) * 100)
+      : 0;
+    
+    // Calculate error rate
+    const errorRate = performanceMetrics.total_requests > 0
+      ? Math.round((performanceMetrics.failed_requests / performanceMetrics.total_requests) * 100)
+      : 0;
+    
     return {
       status: finalStatus,
       service: workerName,
       timestamp: timestamp,
+      server_time: Date.now(),
       version: version,
       mode: 'full',
       
       // Model information (safe defaults)
       model: {
-        name: aiModelConfig.model || '@cf/meta/llama-3.1-8b-instruct',
-        max_tokens: aiModelConfig.maxTokens || 300,
-        temperature: aiModelConfig.temperature || 0.2
+        name: aiModelConfig.model || '@cf/meta/llama-4-scout-17b-16e-instruct',
+        max_tokens: aiModelConfig.maxTokens || 800,
+        temperature: aiModelConfig.temperature || 0.4,
+        timeout: aiModelConfig.timeout || 30000,
+        retries: aiModelConfig.retries || 3
       },
       
       // Configuration info
       configuration: {
         source: workerConfig.source,
         last_updated: workerConfig.lastUpdated,
-        config_version: workerConfig.version || 1
+        cache_status: env.FAQ_CACHE ? 'active' : 'unavailable',
+        config_version: workerConfig.version || 1,
+        fallback_used: workerConfig.source === 'fallback' || workerConfig.source === 'static_fallback'
       },
       
       // Performance metrics
       performance: {
         avg_response_time_ms: performanceMetrics.avg_response_time,
+        uptime_percentage: uptimePercentage,
+        cache_hit_rate_percentage: cacheHitRate,
+        error_rate_percentage: errorRate,
+        last_successful_operation: performanceMetrics.successful_requests > 0 ? timestamp : null,
         total_requests_served: performanceMetrics.total_requests,
         response_time_ms: Date.now() - startTime
       },
@@ -301,26 +339,98 @@ async function generateFullHealthResponse(workerName, env, version, staticFeatur
       // Operational status
       operational_status: {
         health: finalStatus, // Consistent with external status
-        ai_binding_available: !!env.AI,
-        config_loaded: workerConfig.source !== 'static_fallback'
+        ai_binding_available: hasAIBinding,
+        kv_stores_available: {
+          available_stores: (env.FAQ_CACHE ? 1 : 0) + (env.AI_MODEL_CONFIG ? 1 : 0),
+          total_stores: 3,
+          percentage: Math.round(((env.FAQ_CACHE ? 1 : 0) + (env.AI_MODEL_CONFIG ? 1 : 0)) / 3 * 100)
+        },
+        cache_operational: !!env.FAQ_CACHE,
+        config_loaded: workerConfig.source !== 'static_fallback',
+        last_health_check: timestamp
       },
+      
+      // Capabilities
+      capabilities: staticFeatures,
       
       // Features
       features: staticFeatures,
       
       // Health indicators
       health_indicators: {
-        overall_system_health: internalHealthStatus, // This can be different from external status
-        ai_health: env.AI ? 'available' : 'unavailable'
+        config_health: workerConfig.source === 'static_fallback' ? 'degraded' : 'healthy',
+        kv_health: env.FAQ_CACHE ? 'healthy' : 'unavailable',
+        cache_health: env.FAQ_CACHE ? 'healthy' : 'unavailable',
+        ai_health: env.AI ? 'available' : 'unavailable',
+        overall_system_health: internalHealthStatus // This can be different from external status
       },
       
       // Cache status - consistent across all workers
-      cache_status: 'active'
+      cache_status: env.FAQ_CACHE ? 'active' : 'unavailable'
     };
     
   } catch (error) {
     throw new Error(`Full health check failed: ${error.message}`);
   }
+}
+
+/**
+ * Generate fallback health response when dynamic loading fails
+ */
+function generateFallbackHealthResponse(workerName, version, staticFeatures, error) {
+  return {
+    status: 'degraded',
+    service: workerName,
+    timestamp: new Date().toISOString(),
+    server_time: Date.now(),
+    version: version,
+    
+    model: {
+      name: 'unknown',
+      max_tokens: 'unknown',
+      temperature: 'unknown',
+      timeout: 'unknown',
+      retries: 'unknown'
+    },
+    
+    configuration: {
+      source: 'fallback',
+      last_updated: new Date().toISOString(),
+      cache_status: 'unavailable',
+      config_version: 'unknown',
+      fallback_used: true,
+      error: error.message
+    },
+    
+    performance: {
+      avg_response_time_ms: 0,
+      uptime_percentage: 0,
+      cache_hit_rate_percentage: 0,
+      error_rate_percentage: 100,
+      last_successful_operation: null,
+      total_requests_served: 0
+    },
+    
+    operational_status: {
+      health: 'degraded',
+      ai_binding_available: false,
+      kv_stores_available: { available_stores: 0, total_stores: 3, percentage: 0 },
+      cache_operational: false,
+      config_loaded: false,
+      last_health_check: new Date().toISOString()
+    },
+    
+    capabilities: ['fallback_mode'],
+    features: staticFeatures,
+    
+    health_indicators: {
+      config_health: 'error',
+      kv_health: 'unknown',
+      cache_health: 'unknown',
+      ai_health: 'unknown',
+      overall_system_health: 'error'
+    }
+  };
 }
 
 /**
@@ -409,75 +519,12 @@ async function recordHealthCheckFailure(workerName, env, reason) {
 }
 
 /**
- * Generate fallback health response when dynamic loading fails
- */
-function generateFallbackHealthResponse(workerName, version, staticFeatures, error) {
-  return {
-    status: 'degraded',
-    service: workerName,
-    timestamp: new Date().toISOString(),
-    server_time: Date.now(),
-    version: version,
-    
-    model: {
-      name: 'unknown',
-      max_tokens: 'unknown',
-      temperature: 'unknown',
-      timeout: 'unknown',
-      retries: 'unknown'
-    },
-    
-    configuration: {
-      source: 'fallback',
-      last_updated: new Date().toISOString(),
-      cache_status: 'unavailable',
-      config_version: 'unknown',
-      fallback_used: true,
-      error: error.message
-    },
-    
-    performance: {
-      avg_response_time_ms: 0,
-      uptime_percentage: 0,
-      cache_hit_rate_percentage: 0,
-      error_rate_percentage: 100,
-      last_successful_operation: null,
-      total_requests_served: 0
-    },
-    
-    operational_status: {
-      health: 'degraded',
-      ai_binding_available: false,
-      kv_stores_available: { available_stores: 0, total_stores: 3, percentage: 0 },
-      cache_operational: false,
-      config_loaded: false,
-      last_health_check: new Date().toISOString()
-    },
-    
-    capabilities: ['fallback_mode'],
-    features: staticFeatures,
-    
-    health_indicators: {
-      config_health: 'error',
-      kv_health: 'unknown',
-      cache_health: 'unknown',
-      ai_health: 'unknown',
-      overall_system_health: 'error'
-    }
-  };
-}
-
-/**
- * Export performance tracker for use in workers
- */
-export { globalTracker as performanceTracker };
-
-/**
  * Middleware to track performance metrics
  */
 export function withPerformanceTracking(handler) {
   return async (request, env, ctx) => {
     const requestId = crypto.randomUUID();
+    
     globalTracker.startRequest(requestId);
     globalTracker.incrementCounter('total_requests');
     

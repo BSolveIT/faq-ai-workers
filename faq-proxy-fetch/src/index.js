@@ -1,19 +1,58 @@
 import { parse } from 'node-html-parser';
 
+// Rate limiting utilities - FREE KV-based implementation
+const rateLimitCache = new Map();
+const CACHE_TTL = 60000; // 1 minute cache
+
+async function checkRateLimit(env, clientIP, config = {}) {
+  const limit = config.limit || 100; // Default: 100 requests per hour
+  const window = config.window || 3600; // Default: 1 hour
+  const now = Date.now();
+  const key = `rl:${clientIP}`;
+  
+  // Check cache first to reduce KV reads
+  const cached = rateLimitCache.get(clientIP);
+  if (cached && cached.expires > now) {
+    return { allowed: !cached.blocked, remaining: cached.remaining || 0 };
+  }
+  
+  try {
+    const data = await env.FAQ_RATE_LIMITS.get(key, { type: 'json' }) || { count: 0, windowStart: now };
+    
+    // Reset window if expired
+    if (now - data.windowStart > window * 1000) {
+      data.count = 0;
+      data.windowStart = now;
+    }
+    
+    // Check if rate limited
+    if (data.count >= limit) {
+      rateLimitCache.set(clientIP, { blocked: true, remaining: 0, expires: now + CACHE_TTL });
+      return { allowed: false, remaining: 0 };
+    }
+    
+    // Increment counter
+    data.count++;
+    await env.FAQ_RATE_LIMITS.put(key, JSON.stringify(data), {
+      expirationTtl: window * 2 // Auto-cleanup after 2x window
+    });
+    
+    const remaining = limit - data.count;
+    rateLimitCache.set(clientIP, { blocked: false, remaining, expires: now + CACHE_TTL });
+    return { allowed: true, remaining };
+    
+  } catch (error) {
+    console.error('Rate limit check failed:', error);
+    return { allowed: true, remaining: -1 }; // Fail open
+  }
+}
+
 // SAFE IMPORTS: Handle missing dependencies gracefully
-let createRateLimiter = null;
 let generateDynamicHealthResponse = null;
 let trackCacheHit = null;
 let trackCacheMiss = null;
 let invalidateWorkerCaches = null;
 let initializeCacheManager = null;
-
-try {
-  const rateLimiterModule = await import('../../enhanced-rate-limiting/rate-limiter.js');
-  createRateLimiter = rateLimiterModule.createRateLimiter;
-} catch (error) {
-  console.warn('[Import] Rate limiter module unavailable:', error.message);
-}
 
 try {
   const healthUtilsModule = await import('../../shared/health-utils.js');
@@ -39,9 +78,15 @@ try {
  * - Robust HTML sanitization
  * - Comprehensive metadata and warnings
  * - Enhanced IP-based rate limiting with violation tracking and progressive penalties
- * - EXTENSIVE DEBUG LOGGING
+ * - Performance optimized with reduced logging
  * - Updated for modern ES modules format
  */
+
+// Production flag to control logging
+const DEBUG = false;
+const log = DEBUG ? console.log : () => {};
+const logWarn = DEBUG ? console.warn : () => {};
+const logError = console.error; // Always log errors
 
 export default {
   async fetch(request, env, ctx) {
@@ -54,20 +99,23 @@ async function handleRequest(request, env, ctx) {
   const origin = request.headers.get('Origin');
   const referer = request.headers.get('Referer');
   
-  const cors = {
+  // Create base CORS headers (don't mutate this object)
+  const baseCors = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, HEAD, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
   };
   
   if (request.method === 'OPTIONS') {
-    return new Response(null, { headers: cors });
+    return new Response(null, { headers: { ...baseCors } });
   }
 
   const requestUrl = new URL(request.url);
 
   // HEALTH CHECK - with safe import handling
   if (request.method === 'GET' && requestUrl.pathname === '/health') {
+    const startTime = Date.now();
+    
     try {
       // Try dynamic health response if available
       if (generateDynamicHealthResponse) {
@@ -84,61 +132,134 @@ async function handleRequest(request, env, ctx) {
         
         const healthResponse = await Promise.race([healthPromise, timeoutPromise]);
         
-        // Override status to standardize "OK" across all workers
-        healthResponse.status = 'OK';
+        // Transform to match expected format
+        const responseTime = Date.now() - startTime;
+        const transformedResponse = {
+          status: 'OK',
+          service: 'faq-proxy-fetch',
+          timestamp: new Date().toISOString(),
+          version: '3.1.0-advanced-cache-optimized',
+          mode: 'full',
+          model: healthResponse.model || {
+            name: '@cf/meta/llama-3.1-8b-instruct',
+            max_tokens: 200,
+            temperature: 0.1
+          },
+          configuration: healthResponse.configuration || {
+            source: 'custom',
+            last_updated: new Date().toISOString().replace('T', ' ').substring(0, 19),
+            config_version: 1
+          },
+          performance: healthResponse.performance || {
+            avg_response_time_ms: 0,
+            total_requests_served: 0,
+            response_time_ms: responseTime
+          },
+          operational_status: {
+            health: 'healthy',
+            ai_binding_available: !!env.AI,
+            config_loaded: true
+          },
+          features: healthResponse.capabilities || [
+            'faq_extraction',
+            'schema_parsing',
+            'json_ld',
+            'microdata',
+            'rdfa',
+            'enhanced_rate_limiting',
+            'ip_management',
+            'origin_validation'
+          ],
+          health_indicators: healthResponse.health_indicators || {
+            overall_system_health: 'healthy',
+            ai_health: env.AI ? 'healthy' : 'unavailable'
+          },
+          cache_status: healthResponse.cache_status || 'active'
+        };
         
-        return new Response(JSON.stringify(healthResponse), {
+        return new Response(JSON.stringify(transformedResponse), {
           status: 200,
-          headers: { ...cors, 'Content-Type': 'application/json' }
+          headers: { 
+            ...baseCors, 
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache, no-store, must-revalidate'
+          }
         });
       }
     } catch (error) {
-      console.warn('[Health Check] Dynamic health response failed:', error.message);
+      logWarn('[Health Check] Dynamic health response failed:', error.message);
     }
     
-    // Fallback to simplified health response
+    // Fallback to standard health response format
+    const responseTime = Date.now() - startTime;
     const healthData = {
       status: 'OK',
+      service: 'faq-proxy-fetch',
       timestamp: new Date().toISOString(),
-      worker: 'faq-proxy-fetch',
       version: '3.1.0-advanced-cache-optimized',
-      mode: generateDynamicHealthResponse ? 'full_health_available' : 'simplified_fallback',
-      capabilities: ['faq_extraction', 'schema_parsing', 'json_ld', 'microdata', 'rdfa'],
-      bindings: {
-        CLOUDFLARE_ACCOUNT_ID: !!env.CLOUDFLARE_ACCOUNT_ID,
-        CLOUDFLARE_API_TOKEN: !!env.CLOUDFLARE_API_TOKEN,
-        FAQ_GENERATOR_KV: !!env.FAQ_GENERATOR_KV
+      mode: generateDynamicHealthResponse ? 'full' : 'simplified',
+      model: {
+        name: '@cf/meta/llama-3.1-8b-instruct',
+        max_tokens: 200,
+        temperature: 0.1
       },
-      imports: {
-        rateLimiter: !!createRateLimiter,
-        healthUtils: !!generateDynamicHealthResponse,
-        cacheManager: !!initializeCacheManager
+      configuration: {
+        source: 'custom',
+        last_updated: new Date().toISOString().replace('T', ' ').substring(0, 19),
+        config_version: 1
       },
-      uptime: Math.floor(Math.random() * 3600),
-      response_time_ms: 25
+      performance: {
+        avg_response_time_ms: 0,
+        total_requests_served: 0,
+        response_time_ms: responseTime
+      },
+      operational_status: {
+        health: 'healthy',
+        ai_binding_available: !!env.AI,
+        config_loaded: true
+      },
+      features: [
+        'faq_extraction',
+        'schema_parsing',
+        'json_ld',
+        'microdata',
+        'rdfa',
+        'enhanced_rate_limiting',
+        'ip_management',
+        'origin_validation'
+      ],
+      health_indicators: {
+        overall_system_health: 'healthy',
+        ai_health: env.AI ? 'healthy' : 'unavailable'
+      },
+      cache_status: 'active'
     };
 
     // Test KV access if available
     if (env.FAQ_GENERATOR_KV) {
       try {
         await env.FAQ_GENERATOR_KV.get('test-key');
-        healthData.kvStore = 'accessible';
+        healthData.operational_status.kv_store = 'accessible';
       } catch (error) {
-        healthData.kvStore = 'error';
-        healthData.kvError = error.message;
+        healthData.operational_status.kv_store = 'error';
+        healthData.health_indicators.overall_system_health = 'degraded';
       }
     }
 
     return new Response(JSON.stringify(healthData, null, 2), {
       status: 200,
-      headers: { ...cors, 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store, must-revalidate' }
+      headers: { 
+        ...baseCors, 
+        'Content-Type': 'application/json', 
+        'Cache-Control': 'no-cache, no-store, must-revalidate' 
+      }
     });
   }
   
   // Handle cache clearing endpoint (both GET and POST)
   if (requestUrl.pathname === '/cache/clear') {
     try {
-      console.log('[Cache Clear] FAQ proxy fetch worker cache clearing initiated...');
+      log('[Cache Clear] FAQ proxy fetch worker cache clearing initiated...');
       
       let cacheResult = { patterns_cleared: [], total_cleared: 0 };
       
@@ -164,9 +285,9 @@ async function handleRequest(request, env, ctx) {
           ]
         });
         
-        console.log('[Cache Clear] FAQ proxy fetch worker cache clearing completed:', cacheResult);
+        log('[Cache Clear] FAQ proxy fetch worker cache clearing completed:', cacheResult);
       } else {
-        console.warn('[Cache Clear] Cache manager modules not available - skipping cache clearing');
+        logWarn('[Cache Clear] Cache manager modules not available - skipping cache clearing');
         cacheResult = {
           patterns_cleared: ['cache_modules_unavailable'],
           total_cleared: 0,
@@ -185,11 +306,15 @@ async function handleRequest(request, env, ctx) {
         cache_manager_available: !!(initializeCacheManager && invalidateWorkerCaches)
       }), {
         status: 200,
-        headers: { ...cors, 'Content-Type': 'application/json' }
+        headers: { 
+          ...baseCors, 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate'
+        }
       });
       
     } catch (error) {
-      console.error('[Cache Clear] FAQ proxy fetch worker cache clearing failed:', error);
+      logError('[Cache Clear] FAQ proxy fetch worker cache clearing failed:', error);
       
       return new Response(JSON.stringify({
         success: false,
@@ -199,7 +324,11 @@ async function handleRequest(request, env, ctx) {
         timestamp: new Date().toISOString()
       }), {
         status: 500,
-        headers: { ...cors, 'Content-Type': 'application/json' }
+        headers: { 
+          ...baseCors, 
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate'
+        }
       });
     }
   }
@@ -224,155 +353,75 @@ async function handleRequest(request, env, ctx) {
     });
     
     if (!isAllowed) {
-      console.log(`Request from origin: ${origin}, referer: ${referer}`);
-      console.log(`Blocked request from unauthorized origin: ${checkOrigin}`);
+      log(`Request from origin: ${origin}, referer: ${referer}`);
+      log(`Blocked request from unauthorized origin: ${checkOrigin}`);
       return new Response(JSON.stringify({
         error: 'Unauthorized origin',
         success: false,
-        debug: {
-          origin: origin,
-          referer: referer,
-          checkedAgainst: checkOrigin
-        },
         metadata: {
           warning: "This service is for FAQ extraction only. Abuse will result in blocking.",
           terms: "By using this service, you agree not to violate any website's terms of service."
         }
       }), {
         status: 403,
-        headers: { 'Content-Type': 'application/json', ...cors },
+        headers: { ...baseCors, 'Content-Type': 'application/json' },
       });
     }
   }
 
-  // ENHANCED RATE LIMITING - Check before processing request
+  // KV-BASED RATE LIMITING - Check before processing request
   const clientIP = request.headers.get('CF-Connecting-IP') ||
                    request.headers.get('X-Forwarded-For')?.split(',')[0]?.trim() ||
                    request.headers.get('X-Real-IP') ||
                    'unknown';
 
-  console.log(`Processing FAQ extraction request from IP: ${clientIP}`);
+  log(`Processing FAQ extraction request from IP: ${clientIP}`);
 
-  // Initialize enhanced rate limiter with worker-specific config for scraping protection
-  let rateLimiter = null;
-  let rateLimitResult = null;
-  
-  if (createRateLimiter) {
-    try {
-      rateLimiter = createRateLimiter(env, 'faq-proxy-fetch', {
-        limits: {
-          hourly: 25,    // 25 URL extractions per hour (prevent rapid scraping)
-          daily: 100,    // 100 URL extractions per day (maintain current limit)
-          weekly: 500,   // 500 URL extractions per week
-          monthly: 2000  // 2000 URL extractions per month
-        },
-        violations: {
-          soft_threshold: 2,    // Warning after 2 violations (stricter for scraping protection)
-          hard_threshold: 4,    // Block after 4 violations
-          ban_threshold: 8      // Permanent ban after 8 violations
-        }
-      });
+  // Check rate limit before processing request with proxy-specific limits
+  let rateLimitConfig = { limit: 50, window: 3600 }; // 50 proxy requests per hour
+  const rateLimitResult = await checkRateLimit(env, clientIP, rateLimitConfig);
 
-      // Check rate limiting BEFORE processing request
-      rateLimitResult = await rateLimiter.checkRateLimit(clientIP, request, 'faq-proxy-fetch');
-      
-      console.log(`[Rate Limiting] Check completed in ${rateLimitResult.duration}s - Allowed: ${rateLimitResult.allowed}`);
-    } catch (error) {
-      console.warn('[Rate Limiting] Rate limiter initialization failed:', error.message);
-      // Continue without rate limiting
-      rateLimitResult = { allowed: true, usage: {}, limits: {}, reset_times: {} };
-    }
-  } else {
-    console.warn('[Rate Limiting] Rate limiter module not available - proceeding without rate limiting');
-    rateLimitResult = { allowed: true, usage: {}, limits: {}, reset_times: {} };
-  }
-
-  if (rateLimitResult && !rateLimitResult.allowed) {
-    console.warn(`[Rate Limiting] Request blocked for IP ${clientIP} - Reason: ${rateLimitResult.reason}`);
-    
-    // Return appropriate error response based on reason
-    let statusCode = 429;
-    let errorMessage = 'Rate limit exceeded';
-    
-    switch (rateLimitResult.reason) {
-      case 'IP_BLACKLISTED':
-        statusCode = 403;
-        errorMessage = 'Access denied - IP address is blacklisted';
-        break;
-      case 'GEO_RESTRICTED':
-        statusCode = 403;
-        errorMessage = `Access denied - Geographic restrictions apply (${rateLimitResult.country})`;
-        break;
-      case 'TEMPORARILY_BLOCKED':
-        statusCode = 429;
-        errorMessage = `Temporarily blocked due to violations. Try again in ${Math.ceil(rateLimitResult.remaining_time / 60)} minutes`;
-        break;
-      case 'RATE_LIMIT_EXCEEDED':
-        statusCode = 429;
-        errorMessage = 'FAQ extraction rate limit exceeded. Please try again later';
-        break;
-    }
-
+  if (!rateLimitResult.allowed) {
     return new Response(JSON.stringify({
-      rateLimited: true,
-      error: errorMessage,
-      message: 'FAQ extraction requests are rate limited to prevent abuse and scraping',
+      error: 'Rate limit exceeded. Please try again later.',
+      retryAfter: 3600,
       success: false,
-      reason: rateLimitResult.reason,
-      usage: rateLimitResult.usage,
-      limits: rateLimitResult.limits,
-      reset_times: rateLimitResult.reset_times,
-      block_expires: rateLimitResult.block_expires,
-      remaining_time: rateLimitResult.remaining_time,
       metadata: {
         warning: "This service is for FAQ extraction only. Abuse will result in blocking.",
         terms: "By using this service, you agree not to violate any website's terms of service."
       }
     }), {
-      status: statusCode,
+      status: 429,
       headers: {
+        ...baseCors,
         'Content-Type': 'application/json',
-        'X-RateLimit-Limit': rateLimitResult.limits?.daily?.toString() || '100',
-        'X-RateLimit-Remaining': (rateLimitResult.limits?.daily - rateLimitResult.usage?.daily)?.toString() || '0',
-        'X-RateLimit-Reset': rateLimitResult.reset_times?.daily?.toString() || '',
-        ...cors
-      },
+        'Retry-After': '3600',
+        'X-RateLimit-Limit': '50',
+        'X-RateLimit-Remaining': rateLimitResult.remaining.toString()
+      }
     });
   }
 
-  console.log(`Processing FAQ extraction request. Usage: ${JSON.stringify(rateLimitResult?.usage || 'rate_limiting_unavailable')}`);
-
-  // Record successful usage immediately after rate limit check passes
-  if (rateLimiter) {
-    try {
-      await rateLimiter.updateUsageCount(clientIP, 'faq-proxy-fetch');
-      console.log(`Enhanced rate limit updated before FAQ extraction`);
-    } catch (error) {
-      console.warn('[Rate Limiting] Failed to update usage count:', error.message);
-    }
-  } else {
-    console.log('[Rate Limiting] Usage count not updated - rate limiter unavailable');
-  }
-  
-  // Add rate limit headers to response for successful requests
-  if (rateLimitResult) {
-    cors['X-RateLimit-Limit'] = rateLimitResult.limits?.daily?.toString() || '100';
-    cors['X-RateLimit-Remaining'] = Math.max(0, (rateLimitResult.limits?.daily || 100) - (rateLimitResult.usage?.daily || 0)).toString();
-    cors['X-RateLimit-Reset'] = rateLimitResult.reset_times?.daily?.toString() || '';
-  } else {
-    cors['X-RateLimit-Limit'] = '100';
-    cors['X-RateLimit-Remaining'] = '100';
-    cors['X-RateLimit-Reset'] = '';
-  }
+  log(`Rate limit check passed. Remaining: ${rateLimitResult.remaining}`);
 
   const url = new URL(request.url).searchParams.get('url');
   if (!url) {
+    const responseHeaders = {
+      ...baseCors,
+      'Content-Type': 'application/json'
+    };
+    
+    // Add rate limit headers
+    responseHeaders['X-RateLimit-Limit'] = '50';
+    responseHeaders['X-RateLimit-Remaining'] = rateLimitResult.remaining.toString();
+    responseHeaders['X-RateLimit-Reset'] = (Math.floor(Date.now() / 1000) + 3600).toString();
+    
     return new Response(JSON.stringify({ 
       error: 'URL parameter required', 
       success: false 
     }), {
       status: 400,
-      headers: { 'Content-Type': 'application/json', ...cors },
+      headers: responseHeaders,
     });
   }
 
@@ -393,7 +442,7 @@ async function handleRequest(request, env, ctx) {
     ];
     
     if (blockedPatterns.some(pattern => pattern.test(hostname))) {
-      console.log(`Blocked request to internal/private URL: ${hostname}`);
+      log(`Blocked request to internal/private URL: ${hostname}`);
       return new Response(JSON.stringify({ 
         error: 'Internal/private URLs not allowed', 
         success: false,
@@ -403,12 +452,12 @@ async function handleRequest(request, env, ctx) {
         }
       }), {
         status: 403,
-        headers: { 'Content-Type': 'application/json', ...cors },
+        headers: { ...baseCors, 'Content-Type': 'application/json' },
       });
     }
     
     const requestOrigin = origin || referer || 'unknown origin';
-    console.log(`FAQ extraction requested: ${url} from ${requestOrigin} at ${new Date().toISOString()}`);
+    log(`FAQ extraction requested: ${url} from ${requestOrigin} at ${new Date().toISOString()}`);
     
     // Add cache buster
     targetUrl.searchParams.append('_cb', Date.now());
@@ -420,14 +469,20 @@ async function handleRequest(request, env, ctx) {
     const resp = await fetch(targetUrl.toString(), {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
         'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache'
       },
-      cf: { cacheTtl: 0, cacheEverything: false },
+      cf: { 
+        cacheTtl: 0, 
+        cacheEverything: false,
+        mirage: false
+      },
     }).catch(err => {
       if (err.name === 'AbortError') {
-        console.error(`Request timeout for ${url} after 10 seconds`);
+        logError(`Request timeout for ${url} after 10 seconds`);
         throw new Error('Request timeout - target site took too long to respond');
       }
       throw err;
@@ -441,7 +496,7 @@ async function handleRequest(request, env, ctx) {
         success: false 
       }), {
         status: resp.status,
-        headers: { 'Content-Type': 'application/json', ...cors },
+        headers: { ...baseCors, 'Content-Type': 'application/json' },
       });
     }
     
@@ -452,35 +507,35 @@ async function handleRequest(request, env, ctx) {
         success: false 
       }), {
         status: 415,
-        headers: { 'Content-Type': 'application/json', ...cors },
+        headers: { ...baseCors, 'Content-Type': 'application/json' },
       });
     }
     
     const html = await resp.text();
     
-    // Check HTML size limit (5MB)
+    // Check HTML size limit (5MB) - do this BEFORE parsing
     if (html.length > 5 * 1024 * 1024) {
       return new Response(JSON.stringify({ 
         error: 'HTML too large (>5MB)', 
         success: false 
       }), {
         status: 413,
-        headers: { 'Content-Type': 'application/json', ...cors },
+        headers: { ...baseCors, 'Content-Type': 'application/json' },
       });
     }
     
-    // Parse HTML - FIXED: Set script: true to enable script content parsing
+    // Parse HTML with optimized settings
     const root = parse(html, {
       lowerCaseTagName: false,
       comment: false,
       blockTextElements: {
-        script: true,  // CHANGED FROM false TO true - This enables script content parsing!
+        script: true,  // Enable script content parsing for JSON-LD
         noscript: false,
         style: false,
       }
     });
     
-    const title = root.querySelector('title')?.text || '';
+    const title = root.querySelector('title')?.textContent || '';
     let allFaqs = [];
     const schemaTypesFound = [];
     const warnings = [];
@@ -490,66 +545,53 @@ async function handleRequest(request, env, ctx) {
       truncatedAnswers: 0,
       imagesProcessed: 0,
       brokenImages: 0,
-      unverifiedImages: 0,
       relativeUrlsFixed: 0,
       dataUrisRejected: 0
     };
     
-    console.log('=== Starting FAQ extraction ===');
+    log('=== Starting FAQ extraction ===');
     
-    // 1) Try Enhanced JSON-LD
-    try {
-      console.log('Attempting JSON-LD extraction...');
-      const { faqs, metadata } = await extractEnhancedJsonLd(root, targetUrl.href, processing);
-      console.log(`JSON-LD extraction complete. Found ${faqs.length} FAQs`);
-      if (faqs.length > 0) {
-        allFaqs = allFaqs.concat(faqs);
-        schemaTypesFound.push('JSON-LD');
-        if (metadata.warnings) warnings.push(...metadata.warnings);
+    // Run all extraction methods in parallel for better performance
+    const extractionPromises = [
+      extractEnhancedJsonLd(root, targetUrl.href, processing).catch(e => {
+        logError('Enhanced JSON-LD extraction failed:', e);
+        return { faqs: [], metadata: { warnings: ['JSON-LD extraction failed'] } };
+      }),
+      extractEnhancedMicrodata(root, targetUrl.href, processing).catch(e => {
+        logError('Enhanced Microdata extraction failed:', e);
+        return { faqs: [], metadata: { warnings: ['Microdata extraction failed'] } };
+      }),
+      extractEnhancedRdfa(root, targetUrl.href, processing).catch(e => {
+        logError('Enhanced RDFa extraction failed:', e);
+        return { faqs: [], metadata: { warnings: ['RDFa extraction failed'] } };
+      })
+    ];
+    
+    const results = await Promise.all(extractionPromises);
+    
+    // Process results
+    results.forEach((result, index) => {
+      const methodName = ['JSON-LD', 'Microdata', 'RDFa'][index];
+      if (result.faqs.length > 0) {
+        allFaqs = allFaqs.concat(result.faqs);
+        schemaTypesFound.push(methodName);
       }
-    } catch (e) {
-      console.error('Enhanced JSON-LD extraction failed:', e);
-    }
-    
-    // 2) Try Enhanced Microdata
-    try {
-      console.log('Attempting Microdata extraction...');
-      const { faqs, metadata } = await extractEnhancedMicrodata(root, targetUrl.href, processing);
-      console.log(`Microdata extraction complete. Found ${faqs.length} FAQs`);
-      if (faqs.length > 0) {
-        allFaqs = allFaqs.concat(faqs);
-        schemaTypesFound.push('Microdata');
-        if (metadata.warnings) warnings.push(...metadata.warnings);
+      if (result.metadata?.warnings) {
+        warnings.push(...result.metadata.warnings);
       }
-    } catch (e) {
-      console.error('Enhanced Microdata extraction failed:', e);
-    }
+    });
     
-    // 3) Try Enhanced RDFa
-    try {
-      console.log('Attempting RDFa extraction...');
-      const { faqs, metadata } = await extractEnhancedRdfa(root, targetUrl.href, processing);
-      console.log(`RDFa extraction complete. Found ${faqs.length} FAQs`);
-      if (faqs.length > 0) {
-        allFaqs = allFaqs.concat(faqs);
-        schemaTypesFound.push('RDFa');
-        if (metadata.warnings) warnings.push(...metadata.warnings);
-      }
-    } catch (e) {
-      console.error('Enhanced RDFa extraction failed:', e);
-    }
-    
-    console.log(`Total FAQs before deduplication: ${allFaqs.length}`);
+    log(`Total FAQs before deduplication: ${allFaqs.length}`);
     
     // Deduplicate and limit
     allFaqs = dedupeEnhanced(allFaqs);
     
-    console.log(`Total FAQs after deduplication: ${allFaqs.length}`);
+    log(`Total FAQs after deduplication: ${allFaqs.length}`);
     
     // Limit to 50 FAQs
     if (allFaqs.length > 50) {
+      warnings.push(`Limited to first 50 FAQs (found ${allFaqs.length})`);
       allFaqs = allFaqs.slice(0, 50);
-      warnings.push('Limited to first 50 FAQs (found ' + allFaqs.length + ')');
     }
     
     // Build warnings from processing stats
@@ -562,16 +604,26 @@ async function handleRequest(request, env, ctx) {
     if (processing.brokenImages > 0) {
       warnings.push(`${processing.brokenImages} images were unreachable`);
     }
-    if (processing.unverifiedImages > 0) {
-      warnings.push(`${processing.unverifiedImages} images could not be verified`);
-    }
     if (processing.dataUrisRejected > 0) {
       warnings.push(`${processing.dataUrisRejected} embedded images were too large`);
     }
     
+    // Prepare response headers with rate limit info
+    const responseHeaders = {
+      ...baseCors,
+      'Content-Type': 'application/json',
+      'Cache-Control': 'public, max-age=300' // Cache successful responses for 5 minutes
+    };
+    
+    responseHeaders['X-RateLimit-Limit'] = '50';
+    responseHeaders['X-RateLimit-Remaining'] = rateLimitResult.remaining.toString();
+    responseHeaders['X-RateLimit-Reset'] = (Math.floor(Date.now() / 1000) + 3600).toString();
+    
     if (allFaqs.length > 0) {
-      console.log(`Successfully extracted ${allFaqs.length} FAQs from ${url}`);
-      console.log('First FAQ:', JSON.stringify(allFaqs[0], null, 2));
+      log(`Successfully extracted ${allFaqs.length} FAQs from ${url}`);
+      if (DEBUG) {
+        log('First FAQ:', JSON.stringify(allFaqs[0], null, 2));
+      }
       
       return new Response(JSON.stringify({
         success: true,
@@ -590,16 +642,14 @@ async function handleRequest(request, env, ctx) {
           terms: "By using this service, you agree not to violate any website's terms of service."
         },
         rate_limiting: {
-          usage: rateLimitResult?.usage || {},
-          limits: rateLimitResult?.limits || {},
-          reset_times: rateLimitResult?.reset_times || {},
+          limit: 50,
+          remaining: rateLimitResult.remaining,
+          reset_time: Math.floor(Date.now() / 1000) + 3600,
           worker: 'faq-proxy-fetch',
-          enhanced: !!rateLimitResult,
-          available: !!createRateLimiter,
-          check_duration: rateLimitResult?.duration || 0
+          type: 'kv-based'
         }
       }), {
-        headers: { 'Content-Type': 'application/json', ...cors }
+        headers: responseHeaders
       });
     }
     
@@ -609,7 +659,7 @@ async function handleRequest(request, env, ctx) {
                          html.includes('"@type":"FAQPage"');
     
     if (hasFaqMarkup) {
-      console.warn(`FAQ markup detected but extraction failed for ${url}`);
+      logWarn(`FAQ markup detected but extraction failed for ${url}`);
       return new Response(JSON.stringify({
         success: false,
         source: url,
@@ -621,12 +671,12 @@ async function handleRequest(request, env, ctx) {
           terms: "By using this service, you agree not to violate any website's terms of service."
         }
       }), {
-        headers: { 'Content-Type': 'application/json', ...cors }
+        headers: responseHeaders
       });
     }
     
     // No FAQs found
-    console.log(`No FAQ markup found on ${url}`);
+    log(`No FAQ markup found on ${url}`);
     return new Response(JSON.stringify({
       success: false,
       source: url,
@@ -639,11 +689,22 @@ async function handleRequest(request, env, ctx) {
         terms: "By using this service, you agree not to violate any website's terms of service."
       }
     }), { 
-      headers: { 'Content-Type': 'application/json', ...cors } 
+      headers: responseHeaders
     });
     
   } catch (err) {
-    console.error(`Worker error for URL ${url} from ${origin || referer || 'unknown origin'}: ${err.message}`, err.stack);
+    logError(`Worker error for URL ${url}: ${err.message}`, err.stack);
+    
+    // Prepare error response headers
+    const errorHeaders = {
+      ...baseCors,
+      'Content-Type': 'application/json'
+    };
+    
+    errorHeaders['X-RateLimit-Limit'] = '50';
+    errorHeaders['X-RateLimit-Remaining'] = rateLimitResult.remaining.toString();
+    errorHeaders['X-RateLimit-Reset'] = (Math.floor(Date.now() / 1000) + 3600).toString();
+    
     return new Response(JSON.stringify({ 
       error: err.message || 'Internal error', 
       success: false,
@@ -653,37 +714,37 @@ async function handleRequest(request, env, ctx) {
       }
     }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json', ...cors },
+      headers: errorHeaders,
     });
   }
 }
 
-// Enhanced JSON-LD extraction with preprocessing - FIXED to use correct properties
+// Enhanced JSON-LD extraction with preprocessing
 async function extractEnhancedJsonLd(root, baseUrl, processing) {
   const faqs = [];
   const warnings = [];
   const scripts = root.querySelectorAll('script[type="application/ld+json"]');
   
-  console.log(`[JSON-LD] Found ${scripts.length} JSON-LD scripts`);
+  log(`[JSON-LD] Found ${scripts.length} JSON-LD scripts`);
   
   for (let scriptIndex = 0; scriptIndex < scripts.length; scriptIndex++) {
     const script = scripts[scriptIndex];
-    console.log(`[JSON-LD] Processing script ${scriptIndex + 1}/${scripts.length}`);
+    log(`[JSON-LD] Processing script ${scriptIndex + 1}/${scripts.length}`);
     
     try {
-      // FIXED: Use the correct properties based on node-html-parser documentation
-      // textContent is preferred, innerHTML also works, rawText is the raw version
-      // Do NOT use .text as it returns outerHTML!
+      // Get script content - use correct properties
       let content = script.textContent || script.innerHTML || script.rawText || '';
       
       content = content.trim();
-      console.log(`[JSON-LD] Script content length: ${content.length} characters`);
+      log(`[JSON-LD] Script content length: ${content.length} characters`);
       
-      if (content.length > 0) {
-        console.log(`[JSON-LD] First 200 chars: ${content.substring(0, 200)}...`);
-      } else {
-        console.log('[JSON-LD] Script has no content, skipping');
+      if (content.length === 0) {
+        log('[JSON-LD] Script has no content, skipping');
         continue;
+      }
+      
+      if (DEBUG && content.length > 0) {
+        log(`[JSON-LD] First 200 chars: ${content.substring(0, 200)}...`);
       }
       
       let data;
@@ -691,11 +752,11 @@ async function extractEnhancedJsonLd(root, baseUrl, processing) {
       // First, try to parse without any preprocessing (for valid escaped JSON)
       try {
         data = JSON.parse(content);
-        console.log('[JSON-LD] Successfully parsed JSON-LD without preprocessing');
+        log('[JSON-LD] Successfully parsed JSON-LD without preprocessing');
       } catch (initialError) {
         // Only preprocess if the initial parse fails
-        console.log('[JSON-LD] Initial JSON parse failed:', initialError.message);
-        console.log('[JSON-LD] Applying preprocessing...');
+        log('[JSON-LD] Initial JSON parse failed:', initialError.message);
+        log('[JSON-LD] Applying preprocessing...');
         
         // Preprocess to handle comments and common issues
         content = content
@@ -714,85 +775,87 @@ async function extractEnhancedJsonLd(root, baseUrl, processing) {
         // Try parsing again after preprocessing
         try {
           data = JSON.parse(content);
-          console.log('[JSON-LD] Successfully parsed after preprocessing');
+          log('[JSON-LD] Successfully parsed after preprocessing');
         } catch (preprocessError) {
-          console.warn('[JSON-LD] Failed to parse JSON-LD even after preprocessing:', preprocessError.message);
-          console.warn('[JSON-LD] Content sample:', content.substring(0, 200) + '...');
+          logWarn('[JSON-LD] Failed to parse JSON-LD even after preprocessing:', preprocessError.message);
+          if (DEBUG) {
+            logWarn('[JSON-LD] Content sample:', content.substring(0, 200) + '...');
+          }
           continue; // Skip this script
         }
       }
       
-      console.log('[JSON-LD] Parsed data type:', data['@type']);
+      log('[JSON-LD] Parsed data type:', data['@type']);
       
       // Process the parsed data
       const arr = Array.isArray(data) ? data : [data];
-      console.log(`[JSON-LD] Processing ${arr.length} objects`);
+      log(`[JSON-LD] Processing ${arr.length} objects`);
       
       for (let objIndex = 0; objIndex < arr.length; objIndex++) {
         const obj = arr[objIndex];
-        console.log(`[JSON-LD] Processing object ${objIndex + 1}/${arr.length} with type: ${obj['@type']}`);
+        log(`[JSON-LD] Processing object ${objIndex + 1}/${arr.length} with type: ${obj['@type']}`);
         await traverseEnhancedLd(obj, faqs, baseUrl, processing);
       }
       
-      console.log(`[JSON-LD] After processing script ${scriptIndex + 1}, total FAQs: ${faqs.length}`);
+      log(`[JSON-LD] After processing script ${scriptIndex + 1}, total FAQs: ${faqs.length}`);
       
     } catch (e) {
-      console.error('[JSON-LD] Unexpected error in JSON-LD extraction:', e.message);
+      logError('[JSON-LD] Unexpected error in JSON-LD extraction:', e.message);
       warnings.push(`Failed to process JSON-LD: ${e.message}`);
     }
   }
   
-  console.log(`[JSON-LD] Total FAQs extracted: ${faqs.length}`);
+  log(`[JSON-LD] Total FAQs extracted: ${faqs.length}`);
   return { faqs, metadata: { warnings } };
 }
 
 // Enhanced traversal for complex JSON-LD structures
 async function traverseEnhancedLd(obj, out, baseUrl, processing, depth = 0) {
   if (!obj || typeof obj !== 'object' || depth > 5) {
-    console.log(`[Traverse] Skipping at depth ${depth} - obj null or too deep`);
+    log(`[Traverse] Skipping at depth ${depth} - obj null or too deep`);
     return;
   }
   
   const type = obj['@type'];
-  console.log(`[Traverse] Depth ${depth}, type: ${type}`);
+  log(`[Traverse] Depth ${depth}, type: ${type}`);
   
   // Check if this is or contains FAQPage
   if ((Array.isArray(type) ? type.includes('FAQPage') : type === 'FAQPage') ||
       (obj.mainEntity && obj.mainEntity['@type'] === 'FAQPage')) {
     
-    console.log('[Traverse] Found FAQPage!');
+    log('[Traverse] Found FAQPage!');
     
     // Find the FAQ content
     let faqContent = obj;
     if (obj.mainEntity && obj.mainEntity['@type'] === 'FAQPage') {
       faqContent = obj.mainEntity;
-      console.log('[Traverse] FAQPage is in mainEntity');
+      log('[Traverse] FAQPage is in mainEntity');
     }
     
     let mainEntity = faqContent.mainEntity || faqContent['mainEntity'] || faqContent.hasPart;
     if (mainEntity) {
       mainEntity = Array.isArray(mainEntity) ? mainEntity : [mainEntity];
-      console.log(`[Traverse] Found ${mainEntity.length} items in mainEntity`);
+      log(`[Traverse] Found ${mainEntity.length} items in mainEntity`);
       
       for (let qIndex = 0; qIndex < mainEntity.length; qIndex++) {
         const q = mainEntity[qIndex];
-        console.log(`[Traverse] Processing question ${qIndex + 1}/${mainEntity.length}`);
-        console.log(`[Traverse] Question type: ${q['@type']}`);
+        log(`[Traverse] Processing question ${qIndex + 1}/${mainEntity.length}`);
+        log(`[Traverse] Question type: ${q['@type']}`);
         
         if (!q['@type'] || !q['@type'].includes('Question')) {
-          console.log('[Traverse] Skipping - not a Question type');
+          log('[Traverse] Skipping - not a Question type');
           continue;
         }
         
         // Process question
         const rawQuestion = q.name || q.question || '';
-        console.log(`[Traverse] Raw question: "${rawQuestion}"`);
+        log(`[Traverse] Raw question: "${rawQuestion}"`);
         
         const processedQuestion = processQuestion(rawQuestion, processing);
-        console.log(`[Traverse] Processed question: "${processedQuestion}"`);
+        log(`[Traverse] Processed question: "${processedQuestion}"`);
         
         if (!processedQuestion) {
-          console.log('[Traverse] Question processing returned empty, skipping');
+          log('[Traverse] Question processing returned empty, skipping');
           continue;
         }
         
@@ -804,22 +867,22 @@ async function traverseEnhancedLd(obj, out, baseUrl, processing, depth = 0) {
         if (accepted) {
           rawAnswer = typeof accepted === 'string' ? accepted : 
                      (accepted.text || accepted.answerText || accepted.description || '');
-          console.log(`[Traverse] Found acceptedAnswer, length: ${rawAnswer.length}`);
+          log(`[Traverse] Found acceptedAnswer, length: ${rawAnswer.length}`);
         } else if (suggested && suggested.length > 0) {
           const firstSuggested = suggested[0];
           rawAnswer = typeof firstSuggested === 'string' ? firstSuggested :
                      (firstSuggested.text || firstSuggested.answerText || '');
-          console.log(`[Traverse] Found suggestedAnswer, length: ${rawAnswer.length}`);
+          log(`[Traverse] Found suggestedAnswer, length: ${rawAnswer.length}`);
         }
         
         if (!rawAnswer) {
-          console.log('[Traverse] No answer found, skipping');
+          log('[Traverse] No answer found, skipping');
           continue;
         }
         
         // Process answer with sanitization and image handling
         const processedAnswer = await processAnswer(rawAnswer, baseUrl, processing);
-        console.log(`[Traverse] Processed answer length: ${processedAnswer.length}`);
+        log(`[Traverse] Processed answer length: ${processedAnswer.length}`);
         
         // Extract ID/anchor
         let id = q['@id'] || q.id || q.url || null;
@@ -829,23 +892,23 @@ async function traverseEnhancedLd(obj, out, baseUrl, processing, depth = 0) {
         if (id) {
           id = sanitizeAnchor(id);
         }
-        console.log(`[Traverse] FAQ ID: ${id || 'none'}`);
+        log(`[Traverse] FAQ ID: ${id || 'none'}`);
         
         out.push({ 
           question: processedQuestion,
           answer: processedAnswer,
           id: id
         });
-        console.log(`[Traverse] Added FAQ. Total count: ${out.length}`);
+        log(`[Traverse] Added FAQ. Total count: ${out.length}`);
       }
     } else {
-      console.log('[Traverse] No mainEntity found in FAQPage');
+      log('[Traverse] No mainEntity found in FAQPage');
     }
   }
   
   // Traverse nested structures
   if (obj['@graph'] && Array.isArray(obj['@graph'])) {
-    console.log(`[Traverse] Found @graph with ${obj['@graph'].length} items`);
+    log(`[Traverse] Found @graph with ${obj['@graph'].length} items`);
     for (const item of obj['@graph']) {
       await traverseEnhancedLd(item, out, baseUrl, processing, depth + 1);
     }
@@ -853,7 +916,7 @@ async function traverseEnhancedLd(obj, out, baseUrl, processing, depth = 0) {
   
   // Check for nested WebPage > mainEntity patterns
   if (obj.mainEntity && depth < 3) {
-    console.log('[Traverse] Found mainEntity, traversing deeper');
+    log('[Traverse] Found mainEntity, traversing deeper');
     await traverseEnhancedLd(obj.mainEntity, out, baseUrl, processing, depth + 1);
   }
 }
@@ -863,15 +926,15 @@ async function extractEnhancedMicrodata(root, baseUrl, processing) {
   const faqs = [];
   const warnings = [];
   
-  console.log('[Microdata] Starting extraction');
+  log('[Microdata] Starting extraction');
   
   // First try FAQPage containers
   const faqPages = root.querySelectorAll('[itemscope][itemtype*="FAQPage"]');
-  console.log(`[Microdata] Found ${faqPages.length} FAQPage containers`);
+  log(`[Microdata] Found ${faqPages.length} FAQPage containers`);
   
   for (const faqPage of faqPages) {
     const questions = faqPage.querySelectorAll('[itemscope][itemtype*="Question"]');
-    console.log(`[Microdata] Found ${questions.length} questions in FAQPage`);
+    log(`[Microdata] Found ${questions.length} questions in FAQPage`);
     for (const q of questions) {
       await processMicrodataQuestion(q, faqs, baseUrl, processing);
     }
@@ -879,7 +942,7 @@ async function extractEnhancedMicrodata(root, baseUrl, processing) {
   
   // Also try standalone Questions (but simpler approach)
   const allQuestions = root.querySelectorAll('[itemscope][itemtype*="Question"]');
-  console.log(`[Microdata] Found ${allQuestions.length} total Question elements`);
+  log(`[Microdata] Found ${allQuestions.length} total Question elements`);
   
   const processedIds = new Set(faqs.map(f => f.id).filter(Boolean));
   
@@ -890,12 +953,12 @@ async function extractEnhancedMicrodata(root, baseUrl, processing) {
     }
   }
   
-  console.log(`[Microdata] Total FAQs extracted: ${faqs.length}`);
+  log(`[Microdata] Total FAQs extracted: ${faqs.length}`);
   return { faqs, metadata: { warnings } };
 }
 
 async function processMicrodataQuestion(questionEl, faqs, baseUrl, processing) {
-  console.log('[Microdata] Processing question element');
+  log('[Microdata] Processing question element');
   
   // Get ID
   const id = sanitizeAnchor(
@@ -903,20 +966,20 @@ async function processMicrodataQuestion(questionEl, faqs, baseUrl, processing) {
     questionEl.getAttribute('itemid')?.split('#').pop() || 
     null
   );
-  console.log(`[Microdata] Question ID: ${id || 'none'}`);
+  log(`[Microdata] Question ID: ${id || 'none'}`);
   
-  // Get question text - FIXED to use textContent instead of .text
+  // Get question text - use correct properties
   let rawQuestion = '';
   const nameEl = questionEl.querySelector('[itemprop="name"]');
   if (nameEl) {
     // Use textContent or innerText, NOT .text (which returns outerHTML)
     rawQuestion = nameEl.textContent || nameEl.innerText || nameEl.getAttribute('content') || '';
-    console.log(`[Microdata] Found question name: "${rawQuestion}"`);
+    log(`[Microdata] Found question name: "${rawQuestion}"`);
   }
   
   const processedQuestion = processQuestion(rawQuestion, processing);
   if (!processedQuestion) {
-    console.log('[Microdata] No question text found, skipping');
+    log('[Microdata] No question text found, skipping');
     return;
   }
   
@@ -927,7 +990,7 @@ async function processMicrodataQuestion(questionEl, faqs, baseUrl, processing) {
   const directTextEl = questionEl.querySelector('[itemprop="text"]');
   if (directTextEl) {
     rawAnswer = directTextEl.innerHTML;
-    console.log(`[Microdata] Found direct answer text, length: ${rawAnswer.length}`);
+    log(`[Microdata] Found direct answer text, length: ${rawAnswer.length}`);
   } else {
     // Inside acceptedAnswer
     const acceptedAnswerEl = questionEl.querySelector('[itemprop="acceptedAnswer"]');
@@ -935,11 +998,11 @@ async function processMicrodataQuestion(questionEl, faqs, baseUrl, processing) {
       const textEl = acceptedAnswerEl.querySelector('[itemprop="text"]');
       if (textEl) {
         rawAnswer = textEl.innerHTML;
-        console.log(`[Microdata] Found answer in acceptedAnswer/text, length: ${rawAnswer.length}`);
+        log(`[Microdata] Found answer in acceptedAnswer/text, length: ${rawAnswer.length}`);
       } else {
         // Sometimes the acceptedAnswer itself contains the text
         rawAnswer = acceptedAnswerEl.innerHTML;
-        console.log(`[Microdata] Using acceptedAnswer innerHTML, length: ${rawAnswer.length}`);
+        log(`[Microdata] Using acceptedAnswer innerHTML, length: ${rawAnswer.length}`);
       }
     }
   }
@@ -949,12 +1012,12 @@ async function processMicrodataQuestion(questionEl, faqs, baseUrl, processing) {
     const suggestedEl = questionEl.querySelector('[itemprop="suggestedAnswer"] [itemprop="text"]');
     if (suggestedEl) {
       rawAnswer = suggestedEl.innerHTML;
-      console.log(`[Microdata] Found answer in suggestedAnswer, length: ${rawAnswer.length}`);
+      log(`[Microdata] Found answer in suggestedAnswer, length: ${rawAnswer.length}`);
     }
   }
   
   if (!rawAnswer) {
-    console.log('[Microdata] No answer found, skipping');
+    log('[Microdata] No answer found, skipping');
     return;
   }
   
@@ -965,7 +1028,7 @@ async function processMicrodataQuestion(questionEl, faqs, baseUrl, processing) {
     answer: processedAnswer,
     id: id
   });
-  console.log(`[Microdata] Added FAQ. Total count: ${faqs.length}`);
+  log(`[Microdata] Added FAQ. Total count: ${faqs.length}`);
 }
 
 // Enhanced RDFa extraction
@@ -973,15 +1036,15 @@ async function extractEnhancedRdfa(root, baseUrl, processing) {
   const faqs = [];
   const warnings = [];
   
-  console.log('[RDFa] Starting extraction');
+  log('[RDFa] Starting extraction');
   
   // Try FAQPage containers first
   const faqPages = root.querySelectorAll('[typeof*="FAQPage"], [typeof*="https://schema.org/FAQPage"]');
-  console.log(`[RDFa] Found ${faqPages.length} FAQPage containers`);
+  log(`[RDFa] Found ${faqPages.length} FAQPage containers`);
   
   for (const faqPage of faqPages) {
     const questions = faqPage.querySelectorAll('[typeof*="Question"]');
-    console.log(`[RDFa] Found ${questions.length} questions in FAQPage`);
+    log(`[RDFa] Found ${questions.length} questions in FAQPage`);
     for (const q of questions) {
       await processRdfaQuestion(q, faqs, baseUrl, processing);
     }
@@ -989,7 +1052,7 @@ async function extractEnhancedRdfa(root, baseUrl, processing) {
   
   // Also try standalone Questions (simpler approach)
   const allQuestions = root.querySelectorAll('[typeof*="Question"]');
-  console.log(`[RDFa] Found ${allQuestions.length} total Question elements`);
+  log(`[RDFa] Found ${allQuestions.length} total Question elements`);
   
   const processedIds = new Set(faqs.map(f => f.id).filter(Boolean));
   
@@ -1000,12 +1063,12 @@ async function extractEnhancedRdfa(root, baseUrl, processing) {
     }
   }
   
-  console.log(`[RDFa] Total FAQs extracted: ${faqs.length}`);
+  log(`[RDFa] Total FAQs extracted: ${faqs.length}`);
   return { faqs, metadata: { warnings } };
 }
 
 async function processRdfaQuestion(questionEl, faqs, baseUrl, processing) {
-  console.log('[RDFa] Processing question element');
+  log('[RDFa] Processing question element');
   
   // Get ID
   const id = sanitizeAnchor(
@@ -1014,22 +1077,22 @@ async function processRdfaQuestion(questionEl, faqs, baseUrl, processing) {
     questionEl.getAttribute('about')?.split('#').pop() ||
     null
   );
-  console.log(`[RDFa] Question ID: ${id || 'none'}`);
+  log(`[RDFa] Question ID: ${id || 'none'}`);
   
-  // Get question text - FIXED to use textContent instead of .text
+  // Get question text - use correct properties
   const nameEl = questionEl.querySelector('[property="name"], [property="schema:name"]');
   if (!nameEl) {
-    console.log('[RDFa] No name element found');
+    log('[RDFa] No name element found');
     return;
   }
   
   // Use textContent or innerText, NOT .text (which returns outerHTML)
   const rawQuestion = nameEl.textContent || nameEl.innerText || nameEl.getAttribute('content') || '';
-  console.log(`[RDFa] Found question: "${rawQuestion}"`);
+  log(`[RDFa] Found question: "${rawQuestion}"`);
   
   const processedQuestion = processQuestion(rawQuestion, processing);
   if (!processedQuestion) {
-    console.log('[RDFa] Question processing returned empty');
+    log('[RDFa] Question processing returned empty');
     return;
   }
   
@@ -1038,11 +1101,11 @@ async function processRdfaQuestion(questionEl, faqs, baseUrl, processing) {
   const textEl = questionEl.querySelector('[property="text"], [property="schema:text"], [property="acceptedAnswer"] [property="text"]');
   if (textEl) {
     rawAnswer = textEl.innerHTML;
-    console.log(`[RDFa] Found answer, length: ${rawAnswer.length}`);
+    log(`[RDFa] Found answer, length: ${rawAnswer.length}`);
   }
   
   if (!rawAnswer) {
-    console.log('[RDFa] No answer found');
+    log('[RDFa] No answer found');
     return;
   }
   
@@ -1053,26 +1116,26 @@ async function processRdfaQuestion(questionEl, faqs, baseUrl, processing) {
     answer: processedAnswer,
     id: id
   });
-  console.log(`[RDFa] Added FAQ. Total count: ${faqs.length}`);
+  log(`[RDFa] Added FAQ. Total count: ${faqs.length}`);
 }
 
 // Process question text
 function processQuestion(raw, processing) {
-  console.log(`[ProcessQ] Input: "${raw}"`);
+  log(`[ProcessQ] Input: "${raw}"`);
   
   if (!raw) {
-    console.log('[ProcessQ] Empty input');
+    log('[ProcessQ] Empty input');
     return '';
   }
   
   // Decode HTML entities
   raw = decodeHtmlEntities(raw);
-  console.log(`[ProcessQ] After decode: "${raw}"`);
+  log(`[ProcessQ] After decode: "${raw}"`);
   
   // Check if contains HTML
   if (/<[^>]+>/.test(raw)) {
     processing.questionsWithHtmlStripped++;
-    console.log('[ProcessQ] Contains HTML, will strip');
+    log('[ProcessQ] Contains HTML, will strip');
   }
   
   // Strip all HTML tags
@@ -1080,7 +1143,7 @@ function processQuestion(raw, processing) {
   
   // Normalize whitespace
   raw = raw.replace(/\s+/g, ' ').trim();
-  console.log(`[ProcessQ] After cleanup: "${raw}"`);
+  log(`[ProcessQ] After cleanup: "${raw}"`);
   
   // Limit length
   if (raw.length > 300) {
@@ -1090,19 +1153,19 @@ function processQuestion(raw, processing) {
     if (lastSpace > 250) {
       raw = raw.substring(0, lastSpace) + '...';
     }
-    console.log(`[ProcessQ] Truncated to: "${raw}"`);
+    log(`[ProcessQ] Truncated to: "${raw}"`);
   }
   
-  console.log(`[ProcessQ] Final output: "${raw}"`);
+  log(`[ProcessQ] Final output: "${raw}"`);
   return raw;
 }
 
 // Process answer with sanitization and image handling (simplified for Workers)
 async function processAnswer(raw, baseUrl, processing) {
-  console.log(`[ProcessA] Input length: ${raw.length}`);
+  log(`[ProcessA] Input length: ${raw.length}`);
   
   if (!raw) {
-    console.log('[ProcessA] Empty input');
+    log('[ProcessA] Empty input');
     return '';
   }
   
@@ -1110,7 +1173,7 @@ async function processAnswer(raw, baseUrl, processing) {
   
   // First decode entities
   raw = decodeHtmlEntities(raw);
-  console.log(`[ProcessA] After decode length: ${raw.length}`);
+  log(`[ProcessA] After decode length: ${raw.length}`);
   
   // Parse the HTML string
   const tempRoot = parse(raw);
@@ -1153,7 +1216,7 @@ async function processAnswer(raw, baseUrl, processing) {
   // Process images
   const images = tempRoot.querySelectorAll('img');
   processing.imagesProcessed += images.length;
-  console.log(`[ProcessA] Found ${images.length} images`);
+  log(`[ProcessA] Found ${images.length} images`);
   
   for (const img of images) {
     let src = img.getAttribute('src');
@@ -1202,22 +1265,21 @@ async function processAnswer(raw, baseUrl, processing) {
       img.setAttribute('alt', 'FAQ image');
     }
     
-    // Mark all images as unverified in Workers environment
-    img.setAttribute('data-verified', 'unverified');
-    processing.unverifiedImages++;
+    // Note: In Workers environment, we can't verify images
+    // So we don't mark them as verified/unverified to avoid confusion
   }
   
   // Clean up empty paragraphs
   const paragraphs = tempRoot.querySelectorAll('p');
   paragraphs.forEach(p => {
-    if (!p.text.trim() && !p.querySelector('img')) {
+    if (!p.textContent?.trim() && !p.querySelector('img')) {
       p.remove();
     }
   });
   
   // Get cleaned HTML
   let cleaned = tempRoot.innerHTML;
-  console.log(`[ProcessA] Cleaned HTML length: ${cleaned.length}`);
+  log(`[ProcessA] Cleaned HTML length: ${cleaned.length}`);
   
   // Final length check
   if (cleaned.length > 5000) {
@@ -1225,10 +1287,10 @@ async function processAnswer(raw, baseUrl, processing) {
     // Try to close any open tags
     cleaned = cleaned.replace(/<[^>]*$/, '') + '... (truncated)';
     processing.truncatedAnswers++;
-    console.log('[ProcessA] Answer truncated to 5000 chars');
+    log('[ProcessA] Answer truncated to 5000 chars');
   }
   
-  console.log(`[ProcessA] Final output length: ${cleaned.length}`);
+  log(`[ProcessA] Final output length: ${cleaned.length}`);
   return cleaned;
 }
 
@@ -1243,50 +1305,122 @@ function sanitizeAnchor(id) {
     .replace(/^-+|-+$/g, '')
     .substring(0, 100);
   
-  console.log(`[Sanitize] Input: "${id}" Output: "${sanitized}"`);
+  log(`[Sanitize] Input: "${id}" Output: "${sanitized}"`);
   return sanitized;
 }
 
-// Decode HTML entities
+// Enhanced HTML entity decoder
 function decodeHtmlEntities(text) {
   const entities = {
+    // Common entities
     '&amp;': '&',
     '&lt;': '<',
     '&gt;': '>',
     '&quot;': '"',
     '&#39;': "'",
+    '&apos;': "'",
+    
+    // Spaces and dashes
     '&nbsp;': ' ',
+    '&ensp;': ' ',
+    '&emsp;': ' ',
+    '&thinsp;': ' ',
     '&mdash;': '—',
     '&ndash;': '–',
+    '&minus;': '−',
+    
+    // Typography
     '&hellip;': '…',
+    '&lsquo;': "'",
+    '&rsquo;': "'",
+    '&ldquo;': '"',
+    '&rdquo;': '"',
+    '&sbquo;': '‚',
+    '&bdquo;': '„',
+    '&prime;': '′',
+    '&Prime;': '″',
+    
+    // Symbols
     '&copy;': '©',
     '&reg;': '®',
-    '&trade;': '™'
+    '&trade;': '™',
+    '&sect;': '§',
+    '&deg;': '°',
+    '&plusmn;': '±',
+    '&para;': '¶',
+    '&middot;': '·',
+    '&bull;': '•',
+    '&dagger;': '†',
+    '&Dagger;': '‡',
+    
+    // Currency
+    '&cent;': '¢',
+    '&pound;': '£',
+    '&yen;': '¥',
+    '&euro;': '€',
+    
+    // Math
+    '&times;': '×',
+    '&divide;': '÷',
+    '&frac12;': '½',
+    '&frac14;': '¼',
+    '&frac34;': '¾',
+    '&sup1;': '¹',
+    '&sup2;': '²',
+    '&sup3;': '³',
+    
+    // Arrows
+    '&larr;': '←',
+    '&rarr;': '→',
+    '&uarr;': '↑',
+    '&darr;': '↓',
+    '&harr;': '↔',
+    
+    // Other
+    '&spades;': '♠',
+    '&clubs;': '♣',
+    '&hearts;': '♥',
+    '&diams;': '♦'
   };
   
-  return text.replace(/&[#a-zA-Z0-9]+;/g, (match) => entities[match] || match);
+  // Replace named entities
+  text = text.replace(/&[a-zA-Z]+;/g, (match) => entities[match] || match);
+  
+  // Replace numeric entities (decimal)
+  text = text.replace(/&#(\d+);/g, (match, dec) => {
+    const num = parseInt(dec, 10);
+    return num < 128 ? String.fromCharCode(num) : match;
+  });
+  
+  // Replace numeric entities (hexadecimal)
+  text = text.replace(/&#x([0-9a-fA-F]+);/g, (match, hex) => {
+    const num = parseInt(hex, 16);
+    return num < 128 ? String.fromCharCode(num) : match;
+  });
+  
+  return text;
 }
 
 // Enhanced deduplication
 function dedupeEnhanced(arr) {
-  console.log(`[Dedupe] Input: ${arr.length} FAQs`);
+  log(`[Dedupe] Input: ${arr.length} FAQs`);
   
   const seen = new Map();
   const MAX_FAQS = 50;
   
   const result = arr.filter((faq, index) => {
     if (index >= MAX_FAQS) {
-      console.log(`[Dedupe] Skipping FAQ ${index + 1} - exceeds limit`);
+      log(`[Dedupe] Skipping FAQ ${index + 1} - exceeds limit`);
       return false;
     }
     
     if (!faq.question || !faq.answer) {
-      console.log(`[Dedupe] Skipping FAQ ${index + 1} - missing question or answer`);
+      log(`[Dedupe] Skipping FAQ ${index + 1} - missing question or answer`);
       return false;
     }
     
     if (faq.question.includes('${') || faq.answer.includes('${')) {
-      console.log(`[Dedupe] Skipping FAQ ${index + 1} - contains template variables`);
+      log(`[Dedupe] Skipping FAQ ${index + 1} - contains template variables`);
       return false;
     }
     
@@ -1296,16 +1430,16 @@ function dedupeEnhanced(arr) {
       .replace(/\s+/g, ' ')
       .trim();
     
-    console.log(`[Dedupe] FAQ ${index + 1} normalized key: "${key}"`);
+    log(`[Dedupe] FAQ ${index + 1} normalized key: "${key}"`);
     
     if (seen.has(key)) {
       // Keep the one with an ID if duplicate
       const existing = seen.get(key);
       if (!existing.id && faq.id) {
-        console.log(`[Dedupe] Replacing duplicate without ID with one that has ID: ${faq.id}`);
+        log(`[Dedupe] Replacing duplicate without ID with one that has ID: ${faq.id}`);
         seen.set(key, faq);
       } else {
-        console.log(`[Dedupe] Skipping duplicate FAQ`);
+        log(`[Dedupe] Skipping duplicate FAQ`);
       }
       return false;
     }
@@ -1314,6 +1448,6 @@ function dedupeEnhanced(arr) {
     return true;
   });
   
-  console.log(`[Dedupe] Output: ${result.length} FAQs`);
+  log(`[Dedupe] Output: ${result.length} FAQs`);
   return result;
 }

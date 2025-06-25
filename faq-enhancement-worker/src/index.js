@@ -1,13 +1,77 @@
 // Cloudflare Worker: faq-enhancement-worker
-// UPDATED: Llama 3.1 8B model, Enhanced IP-based rate limiting, 2 answer types (Optimised & Detailed)
+// UPDATED: Llama 3.1 8B model, KV-based rate limiting, 2 answer types (Optimised & Detailed)
 // All original functionality preserved
-// SYNTAX ERROR FIXED: Removed duplicate code sections
+// MIGRATED: From expensive Durable Object rate limiting to FREE KV-based rate limiting
 
-const { htmlToText } = require('html-to-text');
-const { parse: parseHTML } = require('node-html-parser');
-import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
+import { htmlToText } from 'html-to-text';
+import { parse as parseHTML } from 'node-html-parser';
 import { generateDynamicHealthResponse, trackCacheHit, trackCacheMiss } from '../../shared/health-utils.js';
 import { cacheAIModelConfig, invalidateWorkerCaches, initializeCacheManager } from '../../shared/advanced-cache-manager.js';
+
+// Rate limiting utilities - FREE KV-based implementation
+const rateLimitCache = new Map();
+const CACHE_TTL_RATE_LIMIT = 60000; // 1 minute cache
+
+async function checkRateLimit(env, clientIP, config = {}) {
+  const limit = config.limit || 100; // Default: 100 requests per hour
+  const window = config.window || 3600; // Default: 1 hour
+  const now = Date.now();
+  const key = `rl:${clientIP}`;
+  
+  // Check cache first to reduce KV reads
+  const cached = rateLimitCache.get(clientIP);
+  if (cached && cached.expires > now) {
+    return { allowed: !cached.blocked, remaining: cached.remaining || 0 };
+  }
+  
+  try {
+    const data = await env.FAQ_RATE_LIMITS.get(key, { type: 'json' }) || { count: 0, windowStart: now };
+    
+    // Reset window if expired
+    if (now - data.windowStart > window * 1000) {
+      data.count = 0;
+      data.windowStart = now;
+    }
+    
+    // Check if rate limited
+    if (data.count >= limit) {
+      rateLimitCache.set(clientIP, { blocked: true, remaining: 0, expires: now + CACHE_TTL_RATE_LIMIT });
+      return { allowed: false, remaining: 0 };
+    }
+    
+    // Increment counter
+    data.count++;
+    await env.FAQ_RATE_LIMITS.put(key, JSON.stringify(data), {
+      expirationTtl: window * 2 // Auto-cleanup after 2x window
+    });
+    
+    const remaining = limit - data.count;
+    rateLimitCache.set(clientIP, { blocked: false, remaining, expires: now + CACHE_TTL_RATE_LIMIT });
+    return { allowed: true, remaining };
+    
+  } catch (error) {
+    console.error('Rate limit check failed:', error);
+    return { allowed: true, remaining: -1 }; // Fail open
+  }
+}
+
+// Session-based context caching with TTL
+const sessionContextCache = new Map();
+const CACHE_TTL = 3600000; // 1 hour in milliseconds
+
+/**
+ * Cache entry with timestamp for TTL management
+ */
+class CacheEntry {
+  constructor(value) {
+    this.value = value;
+    this.timestamp = Date.now();
+  }
+  
+  isExpired() {
+    return Date.now() - this.timestamp > CACHE_TTL;
+  }
+}
 
 /**
  * Get AI model name dynamically from KV store with enhanced caching
@@ -102,16 +166,22 @@ async function getAIModelInfo(env, workerType = 'faq_enhancer') {
   };
 }
 
-// Session-based context caching to reduce duplicate fetching
-const sessionContextCache = new Map();
-
 /**
  * Get current accurate usage counts for response metadata
  */
-async function getCurrentUsageForResponse(rateLimiter, clientIP, workerName) {
+async function getCurrentUsageForResponse(env, clientIP) {
   try {
-    const now = new Date();
-    return await rateLimiter.getCurrentUsage(clientIP, workerName, now);
+    const key = `rl:${clientIP}`;
+    const data = await env.FAQ_RATE_LIMITS.get(key, { type: 'json' });
+    if (data) {
+      return {
+        hourly: data.count || 0,
+        daily: data.count || 0,
+        weekly: data.count || 0,
+        monthly: data.count || 0
+      };
+    }
+    return { hourly: 0, daily: 0, weekly: 0, monthly: 0 };
   } catch (error) {
     console.error('[Response Metadata] Error getting current usage:', error);
     return { hourly: 0, daily: 0, weekly: 0, monthly: 0 };
@@ -148,7 +218,7 @@ export default {
         const healthPromise = generateDynamicHealthResponse(
           'faq-enhancement-worker',
           env,
-          '3.1.0-advanced-cache-optimized',
+          env.WORKER_VERSION || '3.1.0-advanced-cache-optimized',
           ['question_enhancement', 'answer_optimization', 'seo_analysis', 'quality_scoring', 'enhanced_rate_limiting', 'ip_management']
         );
         
@@ -158,14 +228,10 @@ export default {
         
         const healthResponse = await Promise.race([healthPromise, timeoutPromise]);
         
-        // Add AI model information to health response
-        const aiModelInfo = await getAIModelInfo(env, 'faq_enhancer');
-        healthResponse.current_model = aiModelInfo.current_model;
-        healthResponse.model_source = aiModelInfo.model_source;
-        healthResponse.worker_type = aiModelInfo.worker_type;
-        
-        // Ensure consistent status response across all workers
-        healthResponse.status = 'OK';
+        // The generateDynamicHealthResponse already includes all needed fields including:
+        // - status, service, model info, current_model, model_source, worker_type
+        // - configuration, performance, operational_status, features, health_indicators
+        // No need to add anything extra
         
         return new Response(JSON.stringify(healthResponse), {
           status: 200,
@@ -176,17 +242,42 @@ export default {
         console.warn('[Health Check] EMERGENCY fallback for faq-enhancement-worker:', error.message);
         
         // EMERGENCY: Always return HTTP 200 to prevent monitoring cascade failures
+        // generateDynamicHealthResponse already handles this internally, but this is a last resort
         const emergencyResponse = {
-          worker: 'faq-enhancement-worker',
-          status: 'healthy',
+          status: 'OK',
+          service: 'faq-enhancement-worker',
           timestamp: new Date().toISOString(),
-          version: '3.1.0-advanced-cache-optimized',
-          capabilities: ['question_enhancement', 'answer_optimization', 'seo_analysis', 'quality_scoring', 'enhanced_rate_limiting', 'ip_management'],
+          version: env.WORKER_VERSION || '3.1.0-advanced-cache-optimized',
+          mode: 'emergency',
+          model: {
+            name: env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct',
+            max_tokens: 1500,
+            temperature: 0.7
+          },
+          configuration: {
+            source: 'default',
+            last_updated: new Date().toISOString(),
+            config_version: 1
+          },
+          performance: {
+            avg_response_time_ms: 0,
+            total_requests_served: 0,
+            response_time_ms: 0
+          },
+          operational_status: {
+            health: 'degraded',
+            ai_binding_available: !!env.AI,
+            config_loaded: false
+          },
+          features: ['question_enhancement', 'answer_optimization', 'seo_analysis', 'quality_scoring', 'enhanced_rate_limiting', 'ip_management'],
+          health_indicators: {
+            overall_system_health: 'degraded',
+            ai_health: 'unknown'
+          },
+          cache_status: 'unavailable',
           current_model: env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct',
           model_source: 'env_fallback',
-          worker_type: 'faq_enhancer',
-          rate_limiting: { enabled: true, enhanced: true },
-          cache_status: 'active'
+          worker_type: 'faq_enhancer'
         };
         
         return new Response(JSON.stringify(emergencyResponse), {
@@ -222,6 +313,9 @@ export default {
           ]
         });
         
+        // Clear session context cache
+        sessionContextCache.clear();
+        
         console.log('[Cache Clear] Enhancement worker cache clearing completed:', cacheResult);
         
         return new Response(JSON.stringify({
@@ -231,6 +325,7 @@ export default {
           timestamp: new Date().toISOString(),
           patterns_cleared: cacheResult?.patterns_cleared || [],
           total_keys_cleared: cacheResult?.total_cleared || 0,
+          session_cache_cleared: true,
           clear_results: cacheResult || {}
         }), {
           status: 200,
@@ -285,73 +380,28 @@ export default {
 
       console.log(`Processing enhancement request from IP: ${clientIP}`);
 
-      // Initialize enhanced rate limiter with worker-specific config
-      const rateLimiter = await createRateLimiter(env, 'faq-enhancement', {
-        limits: {
-          hourly: 15,    // 15 enhancement requests per hour (AI-intensive)
-          daily: 50,     // 50 enhancement requests per day
-          weekly: 250,   // 250 enhancement requests per week
-          monthly: 1000  // 1000 enhancement requests per month
-        },
-        violations: {
-          soft_threshold: 3,    // Warning after 3 violations
-          hard_threshold: 5,    // Block after 5 violations
-          ban_threshold: 10     // Permanent ban after 10 violations
-        }
-      });
+      // Check rate limit before processing request with enhancement-specific config
+      let rateLimitConfig = { limit: 25, window: 3600 }; // 25 enhancements per hour
 
-      // Check rate limiting BEFORE processing request
-      const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, request, 'faq-enhancement');
-      
-      console.log(`[Rate Limiting] Check completed in ${rateLimitResult.duration}s - Allowed: ${rateLimitResult.allowed}`);
+      const rateLimitResult = await checkRateLimit(env, clientIP, rateLimitConfig);
 
       if (!rateLimitResult.allowed) {
-        console.warn(`[Rate Limiting] Request blocked for IP ${clientIP} - Reason: ${rateLimitResult.reason}`);
-        
-        // Return appropriate error response based on reason
-        let statusCode = 429;
-        let errorMessage = 'Rate limit exceeded';
-        
-        switch (rateLimitResult.reason) {
-          case 'IP_BLACKLISTED':
-            statusCode = 403;
-            errorMessage = 'Access denied - IP address is blacklisted';
-            break;
-          case 'GEO_RESTRICTED':
-            statusCode = 403;
-            errorMessage = `Access denied - Geographic restrictions apply (${rateLimitResult.country})`;
-            break;
-          case 'TEMPORARILY_BLOCKED':
-            statusCode = 429;
-            errorMessage = `Temporarily blocked due to violations. Try again in ${Math.ceil(rateLimitResult.remaining_time / 60)} minutes`;
-            break;
-          case 'RATE_LIMIT_EXCEEDED':
-            statusCode = 429;
-            errorMessage = 'Enhancement rate limit exceeded. Please try again later';
-            break;
-        }
-
         return new Response(JSON.stringify({
-          error: errorMessage,
-          message: 'FAQ enhancement requests are rate limited to prevent abuse',
-          rateLimited: true,
-          reason: rateLimitResult.reason,
-          usage: rateLimitResult.usage,
-          limits: rateLimitResult.limits,
-          reset_times: rateLimitResult.reset_times,
-          block_expires: rateLimitResult.block_expires,
-          remaining_time: rateLimitResult.remaining_time
+          error: 'Rate limit exceeded. Please try again later.',
+          retryAfter: 3600
         }), {
-          status: statusCode,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          status: 429,
+          headers: {
+            'Content-Type': 'application/json',
+            'Retry-After': '3600',
+            'X-RateLimit-Limit': '25',
+            'X-RateLimit-Remaining': '0',
+            ...corsHeaders
+          }
         });
       }
 
-      console.log(`Processing enhancement request. Usage: ${JSON.stringify(rateLimitResult.usage)}`);
-
-      // Record usage count immediately after rate limit check passes
-      await rateLimiter.updateUsageCount(clientIP, 'faq-enhancement');
-      console.log(`Enhanced rate limit updated before AI processing`);
+      console.log(`Rate limit check passed. Remaining: ${rateLimitResult.remaining}`);
 
       // Clean input for AI processing
       const sanitizedQuestion = sanitizeContent(question);
@@ -361,7 +411,7 @@ export default {
       let pageContext = '';
       if (pageUrl) {
         try {
-          pageContext = await getCachedPageContext(pageUrl, sessionId);
+          pageContext = await getCachedPageContext(pageUrl, sessionId, env);
           console.log('Page context extracted:', pageContext.length, 'characters');
         } catch (contextError) {
           console.error('Page context extraction failed:', contextError.message);
@@ -433,9 +483,6 @@ RETURN ONLY THIS JSON STRUCTURE (no additional text):
 
 IMPORTANT: Return ONLY the JSON object above. No other text.`;
 
-      // Record usage in enhanced rate limiting system (before processing)
-      // This will be recorded again after successful completion
-
       // Get dynamic AI model for this worker
       const aiModel = await getAIModel(env, 'faq_enhancer');
       console.log(`[AI Model] Using model: ${aiModel} for faq_enhancer worker`);
@@ -444,6 +491,7 @@ IMPORTANT: Return ONLY the JSON object above. No other text.`;
       const MAX_WAIT_TIME = 15000; // 15 seconds max per attempt
       const MAX_RETRIES = 3;
       let lastError = null;
+      let enhancements = null;
       
       console.log(`Starting AI enhancement with ${MAX_RETRIES} retry attempts available`);
       
@@ -478,8 +526,6 @@ IMPORTANT: Return ONLY the JSON object above. No other text.`;
             timeoutPromise
           ]);
 
-          let enhancements;
-          
           try {
             // Get the response text
             const responseText = aiResponse.response;
@@ -518,44 +564,19 @@ IMPORTANT: Return ONLY the JSON object above. No other text.`;
 
             // Validate and enhance structure
             validateAndEnhanceResponse(enhancements, sanitizedQuestion, sanitizedAnswer);
+            
+            // Success - break out of retry loop
+            break;
 
           } catch (parseError) {
             console.error(`JSON parsing failed on attempt ${attempt}:`, parseError.message);
             
-            // Use comprehensive fallback
+            // Use comprehensive fallback on parse error
             enhancements = createComprehensiveFallbackEnhancements(sanitizedQuestion, sanitizedAnswer, pageContext);
             console.log('Using comprehensive fallback enhancement structure');
+            // Success with fallback - break out of retry loop
+            break;
           }
-
-          console.log(`Enhancement complete. Generated ${enhancements.question_variations.length} question variations.`);
-          
-          console.log(`========== Request completed successfully in ${Date.now() - startTime}ms ==========`);
-
-          // Return successful response
-          return new Response(JSON.stringify({
-            success: true,
-            enhancements: enhancements,
-            usage: rateLimitResult.usage,
-            limits: rateLimitResult.limits,
-            reset_times: rateLimitResult.reset_times,
-            model_info: {
-              model: aiModel,
-              worker_type: 'faq_enhancer',
-              dynamic_model: true,
-              version: env.WORKER_VERSION || '3.1.0-advanced-cache-optimized',
-              processingTime: Date.now() - startTime,
-              page_context_extracted: pageContext.length > 0,
-              cache_status: sessionContextCache.has(`${sessionId || 'no-session'}:${pageUrl}`) ? 'hit' : 'miss',
-              attempts_used: attempt,
-              rate_limiting: {
-                worker: 'faq-enhancement',
-                enhanced: true,
-                check_duration: rateLimitResult.duration
-              }
-            }
-          }), {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-          });
 
         } catch (aiError) {
           lastError = aiError;
@@ -573,37 +594,55 @@ IMPORTANT: Return ONLY the JSON object above. No other text.`;
             await new Promise(resolve => setTimeout(resolve, delay));
           } else {
             console.log('All retry attempts exhausted');
+            // Use fallback after all retries failed
+            enhancements = createComprehensiveFallbackEnhancements(sanitizedQuestion, sanitizedAnswer, pageContext);
           }
         }
       }
       
-      // All attempts failed
-      console.error('AI enhancement failed after all retries:', lastError?.message);
-      console.log('Returning fallback response with rule-based enhancements');
-      console.log(`========== Request completed with fallback in ${Date.now() - startTime}ms ==========`);
+      // Ensure we always have enhancements
+      if (!enhancements) {
+        enhancements = createComprehensiveFallbackEnhancements(sanitizedQuestion, sanitizedAnswer, pageContext);
+      }
       
-      // Note: We don't decrement rate limits on AI failures since the user still consumed the attempt
-      // The enhanced rate limiting system will handle this appropriately
-      
-      // Return graceful fallback response
+      console.log(`Enhancement complete. Generated ${enhancements.question_variations.length} question variations.`);
+      console.log(`========== Request completed in ${Date.now() - startTime}ms ==========`);
+
+      // Get current usage for response
+      const currentUsage = await getCurrentUsageForResponse(env, clientIP);
+
+      // Return successful response
       return new Response(JSON.stringify({
         success: true,
-        enhancements: createComprehensiveFallbackEnhancements(sanitizedQuestion, sanitizedAnswer, pageContext),
-        fallback: true,
-        message: "AI service is experiencing issues - using instant rule-based enhancements",
-        usage: rateLimitResult.usage,
-        limits: rateLimitResult.limits,
-        reset_times: rateLimitResult.reset_times,
-        debug_info: {
-          error: lastError?.message,
-          attempts: MAX_RETRIES,
-          timestamp: new Date().toISOString(),
+        enhancements: enhancements,
+        usage: currentUsage,
+        limits: { hourly: rateLimitConfig.limit },
+        reset_times: { hourly: new Date(Date.now() + rateLimitConfig.window * 1000).toISOString() },
+        model_info: {
+          model: aiModel,
+          worker_type: 'faq_enhancer',
+          dynamic_model: true,
+          version: env.WORKER_VERSION || '3.1.0-kv-rate-limited',
+          processingTime: Date.now() - startTime,
+          page_context_extracted: pageContext.length > 0,
+          cache_status: sessionContextCache.has(`${sessionId || 'no-session'}:${pageUrl}`) ? 'hit' : 'miss',
+          attempts_used: lastError ? MAX_RETRIES : 1,
           rate_limiting: {
             worker: 'faq-enhancement',
-            enhanced: true,
-            check_duration: rateLimitResult.duration
+            type: 'kv_based',
+            limit: rateLimitConfig.limit,
+            window: rateLimitConfig.window,
+            remaining: rateLimitResult.remaining
           }
-        }
+        },
+        fallback: lastError !== null,
+        ...(lastError && {
+          debug_info: {
+            error: lastError.message,
+            attempts: MAX_RETRIES,
+            timestamp: new Date().toISOString()
+          }
+        })
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
@@ -647,24 +686,30 @@ IMPORTANT: Return ONLY the JSON object above. No other text.`;
 };
 
 // Get cached page context or extract new
-async function getCachedPageContext(pageUrl, sessionId) {
+async function getCachedPageContext(pageUrl, sessionId, env) {
   const cacheKey = `${sessionId || 'no-session'}:${pageUrl}`;
   
-  // Check cache first
+  // Check cache first and validate TTL
   if (sessionContextCache.has(cacheKey)) {
-    trackCacheHit();
-    console.log(`Cache HIT for ${cacheKey} - returning cached context`);
-    return sessionContextCache.get(cacheKey);
+    const entry = sessionContextCache.get(cacheKey);
+    if (!entry.isExpired()) {
+      trackCacheHit();
+      console.log(`Cache HIT for ${cacheKey} - returning cached context`);
+      return entry.value;
+    } else {
+      console.log(`Cache entry for ${cacheKey} has expired - removing`);
+      sessionContextCache.delete(cacheKey);
+    }
   }
   
   trackCacheMiss();
   console.log(`Cache MISS for ${cacheKey} - extracting new context`);
   
   // Extract new context
-  const context = await extractPageContext(pageUrl);
+  const context = await extractPageContext(pageUrl, env);
   
-  // Cache it
-  sessionContextCache.set(cacheKey, context);
+  // Cache it with timestamp
+  sessionContextCache.set(cacheKey, new CacheEntry(context));
   console.log(`Cached context for ${cacheKey} - Cache size: ${sessionContextCache.size}`);
   
   // Cleanup old cache entries if needed
@@ -676,8 +721,8 @@ async function getCachedPageContext(pageUrl, sessionId) {
 }
 
 // Enhanced page context extraction using modern server-side parsing
-async function extractPageContext(pageUrl) {
-  const CONTEXT_LIMIT = 12000; // ~3000 tokens worth of context
+async function extractPageContext(pageUrl, env) {
+  const CONTEXT_LIMIT = 12000; // Full extraction limit - optimized to 5000 chars for AI processing
   console.log(`Starting page context extraction for: ${pageUrl}`);
   
   try {
@@ -787,10 +832,22 @@ async function extractPageContext(pageUrl) {
       console.warn('Extracted context is very short, page may have limited content');
     }
     
-    // Limit to 3000 chars for speed
-    if (context.length > 3000) {
-      console.log(`Truncating context from ${context.length} to 3000 characters for speed`);
-      context = context.substring(0, 3000) + '...';
+    // Limit to 5000 chars for balanced performance and context
+    if (context.length > 5000) {
+      console.log(`Optimizing context from ${context.length} to 5000 characters for balanced performance`);
+      // Smart truncation at sentence boundary
+      const truncated = context.substring(0, 5000);
+      const lastSentenceEnd = Math.max(
+        truncated.lastIndexOf('.'),
+        truncated.lastIndexOf('!'),
+        truncated.lastIndexOf('?')
+      );
+      
+      if (lastSentenceEnd > 4500) {
+        context = truncated.substring(0, lastSentenceEnd + 1);
+      } else {
+        context = truncated + '...';
+      }
     }
     
     console.log(`Final context length: ${context.length} characters`);
@@ -834,13 +891,17 @@ async function extractContentWithHTMLRewriter(html) {
       skipContent: false,
       headings: [],
       metaDescription: '',
-      structuredData: {},
+      structuredData: {
+        hasImages: false,
+        hasLists: false,
+        linkCount: 0
+      },
       linkContext: ''
     };
 
     // Extract title
     const titleElem = root.querySelector('title');
-    contentCollector.title = titleElem ? titleElem.text : '';
+    contentCollector.title = titleElem ? titleElem.text.trim() : '';
     
     // Extract meta description
     const metaDesc = root.querySelector('meta[name="description"]');
@@ -883,6 +944,9 @@ async function extractContentWithHTMLRewriter(html) {
     
     // Extract list items
     const listItems = root.querySelectorAll('li');
+    if (listItems.length > 0) {
+      contentCollector.structuredData.hasLists = true;
+    }
     listItems.forEach(elem => {
       const text = elem.text.trim();
       if (text.length > 10) {
@@ -892,6 +956,9 @@ async function extractContentWithHTMLRewriter(html) {
     
     // Extract image alt text
     const images = root.querySelectorAll('img[alt]');
+    if (images.length > 0) {
+      contentCollector.structuredData.hasImages = true;
+    }
     images.forEach(elem => {
       const alt = elem.getAttribute('alt');
       if (alt && alt.length > 3) {
@@ -901,6 +968,7 @@ async function extractContentWithHTMLRewriter(html) {
     
     // Extract link context
     const links = root.querySelectorAll('a');
+    contentCollector.structuredData.linkCount = links.length;
     links.forEach(elem => {
       const text = elem.text.trim();
       const href = elem.getAttribute('href');
@@ -962,11 +1030,7 @@ async function extractContentWithHTMLRewriter(html) {
       title: contentCollector.title,
       headings: contentCollector.headings,
       metaDescription: contentCollector.metaDescription,
-      structuredData: {
-        hasImages: contentCollector.imgAltText.length > 0,
-        hasLists: contentCollector.listContent.length > 0,
-        linkCount: contentCollector.linkContext.split('(').length - 1
-      }
+      structuredData: contentCollector.structuredData
     };
 
   } catch (error) {
@@ -985,7 +1049,12 @@ async function extractContentWithHTMLRewriter(html) {
         content: cleanText(fallbackText),
         title: '',
         headings: [],
-        metaDescription: ''
+        metaDescription: '',
+        structuredData: {
+          hasImages: false,
+          hasLists: false,
+          linkCount: 0
+        }
       };
     } catch (fallbackError) {
       console.error('Fallback extraction also failed:', fallbackError);
@@ -993,7 +1062,12 @@ async function extractContentWithHTMLRewriter(html) {
         content: '',
         title: '',
         headings: [],
-        metaDescription: ''
+        metaDescription: '',
+        structuredData: {
+          hasImages: false,
+          hasLists: false,
+          linkCount: 0
+        }
       };
     }
   }
@@ -1078,14 +1152,32 @@ function normaliseContent(content) {
   return filteredSentences.join('. ').trim();
 }
 
-// Cache cleanup
+// Cache cleanup with TTL support
 function cleanupCache() {
   const initialSize = sessionContextCache.size;
-  const entriesToRemove = Math.floor(sessionContextCache.size * 0.25);
-  const keysToRemove = Array.from(sessionContextCache.keys()).slice(0, entriesToRemove);
+  let removed = 0;
   
-  keysToRemove.forEach(key => sessionContextCache.delete(key));
-  console.log(`Cache cleanup: removed ${entriesToRemove} entries (${initialSize} → ${sessionContextCache.size})`);
+  // Remove expired entries first
+  for (const [key, entry] of sessionContextCache) {
+    if (entry.isExpired()) {
+      sessionContextCache.delete(key);
+      removed++;
+    }
+  }
+  
+  // If still over limit, remove oldest entries
+  if (sessionContextCache.size > 40) {
+    const entriesToRemove = sessionContextCache.size - 40;
+    const sortedEntries = Array.from(sessionContextCache.entries())
+      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+    
+    for (let i = 0; i < entriesToRemove; i++) {
+      sessionContextCache.delete(sortedEntries[i][0]);
+      removed++;
+    }
+  }
+  
+  console.log(`Cache cleanup: removed ${removed} entries (${initialSize} → ${sessionContextCache.size})`);
 }
 
 // UPDATED: Validate and enhance AI response for 2 answer types
@@ -1372,7 +1464,7 @@ function calculateQualityScores(question, answer) {
   const answerWordsLower = answer.toLowerCase().split(/\s+/);
   const overlap = questionWords.filter(word => answerWordsLower.includes(word)).length;
   if (overlap > 2) seoOptimization += 2;
-  if (answer.length >= 50 && answer.length <= 300) seoOptimization += 2;
+  if (answer.length >= 150 && answer.length <= 1000) seoOptimization += 2;
   if (/\b(benefits?|advantages?|features?|steps?|tips?)\b/i.test(answer)) seoOptimization += 1;
   
   // Cap scores at 10
@@ -1432,7 +1524,7 @@ function isVoiceSearchFriendly(question) {
 // Check featured snippet potential
 function hasFeaturedSnippetPotential(answer) {
   const words = answer.split(' ').length;
-  // Featured snippets typically 40-60 words
+  // Featured snippets typically 40-120 words
   return words >= 40 && words <= 120 && 
          (answer.includes('.') || answer.includes(','));
 }

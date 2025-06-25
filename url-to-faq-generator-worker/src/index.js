@@ -11,18 +11,19 @@
  */
 
 import { parse } from 'node-html-parser';
-import { createRateLimiter } from '../../enhanced-rate-limiting/rate-limiter.js';
 import { generateDynamicHealthResponse, trackCacheHit, trackCacheMiss } from '../../shared/health-utils.js';
 import { cacheAIModelConfig, invalidateWorkerCaches, initializeCacheManager } from '../../shared/advanced-cache-manager.js';
 
+// Note: Rate limiting is now handled by the centralized enhanced-rate-limiting worker
+// This worker no longer implements individual rate limiting
+
 /**
- * Get AI model name dynamically from KV store with enhanced caching
+ * Get AI model configuration with caching
  */
-async function getAIModel(env, workerType = 'topic_generator') {
+async function getAIModelConfig(env, workerType = 'url_faq_generator') {
   try {
     console.log(`[AI Model Cache] Retrieving model config for ${workerType} with enhanced caching...`);
     
-    // Use the advanced cache manager for AI model config
     const configData = await cacheAIModelConfig('ai_model_config', env, async () => {
       console.log(`[AI Model Cache] Cache miss - loading fresh config from KV...`);
       const freshConfig = await env.AI_MODEL_CONFIG?.get('ai_model_config', { type: 'json' });
@@ -36,19 +37,27 @@ async function getAIModel(env, workerType = 'topic_generator') {
       return freshConfig;
     });
     
-    // Extract the specific model for this worker type
-    if (configData?.ai_models?.[workerType]) {
-      console.log(`[AI Model Cache] ✅ Using cached dynamic model for ${workerType}: ${configData.ai_models[workerType]}`);
-      return configData.ai_models[workerType];
-    }
-    
-    console.log(`[AI Model Cache] No dynamic model found for ${workerType} in cached config, checking fallback`);
+    return configData;
   } catch (error) {
     console.error(`[AI Model Cache] Error with cached retrieval: ${error.message}`);
+    return null;
+  }
+}
+
+// Note: Rate limit configuration is now handled by the centralized enhanced-rate-limiting worker
+
+/**
+ * Get AI model name dynamically from KV store with enhanced caching
+ */
+async function getAIModel(env, workerType = 'url_faq_generator') {
+  const configData = await getAIModelConfig(env, workerType);
+  
+  if (configData?.ai_models?.[workerType]) {
+    console.log(`[AI Model Cache] ✅ Using cached dynamic model for ${workerType}: ${configData.ai_models[workerType]}`);
+    return configData.ai_models[workerType];
   }
   
-  // Fallback to env.MODEL_NAME or hardcoded default
-  const fallbackModel = env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct';
+  const fallbackModel = env.MODEL_NAME || '@cf/meta/llama-4-scout-17b-16e-instruct';
   console.log(`[AI Model Cache] ✅ Using fallback model for ${workerType}: ${fallbackModel}`);
   return fallbackModel;
 }
@@ -56,64 +65,22 @@ async function getAIModel(env, workerType = 'topic_generator') {
 /**
  * Get AI model info with source information for health endpoint
  */
-async function getAIModelInfo(env, workerType = 'topic_generator') {
-  try {
-    console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Retrieving model info for ${workerType}...`);
-    console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Current timestamp: ${new Date().toISOString()}`);
-    
-    // Use the advanced cache manager for AI model config
-    const configData = await cacheAIModelConfig('ai_model_config', env, async () => {
-      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Cache miss - loading fresh config from KV...`);
-      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] KV namespace being accessed: AI_MODEL_CONFIG`);
-      
-      const freshConfig = await env.AI_MODEL_CONFIG?.get('ai_model_config', { type: 'json' });
-      
-      if (!freshConfig) {
-        console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] No config found in KV, returning null for cache`);
-        return null;
-      }
-      
-      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Loaded fresh config from KV:`, JSON.stringify(freshConfig, null, 2));
-      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Fresh config keys:`, Object.keys(freshConfig));
-      if (freshConfig.ai_models) {
-        console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] AI models in fresh config:`, Object.keys(freshConfig.ai_models));
-        console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Model for ${workerType}:`, freshConfig.ai_models[workerType]);
-      }
-      return freshConfig;
-    });
-    
-    // DEBUG: Log what we got from cache
-    console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Config data from cache:`, configData ? 'present' : 'null');
-    if (configData) {
-      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Cache data structure:`, Object.keys(configData));
-      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Cache updated_at:`, configData.updated_at);
-      if (configData.ai_models) {
-        console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] AI models in cache:`, Object.keys(configData.ai_models));
-        console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Specific model for ${workerType}:`, configData.ai_models[workerType]);
-      }
-    }
-    
-    // Extract the specific model for this worker type
-    if (configData?.ai_models?.[workerType]) {
-      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] ✅ Using cached dynamic model for ${workerType}: ${configData.ai_models[workerType]}`);
-      console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] Model source: kv_config, Updated at: ${configData.updated_at}`);
-      return {
-        current_model: configData.ai_models[workerType],
-        model_source: 'kv_config',
-        worker_type: workerType,
-        cache_updated_at: configData.updated_at,
-        cache_version: configData.version
-      };
-    }
-    
-    console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] No dynamic model found for ${workerType} in cached config, checking fallback`);
-  } catch (error) {
-    console.error(`[AI Model Info] [WORKER_SYNC_DEBUG] Error with cached retrieval: ${error.message}`);
+async function getAIModelInfo(env, workerType = 'url_faq_generator') {
+  const configData = await getAIModelConfig(env, workerType);
+  
+  if (configData?.ai_models?.[workerType]) {
+    console.log(`[AI Model Info] ✅ Using cached dynamic model for ${workerType}: ${configData.ai_models[workerType]}`);
+    return {
+      current_model: configData.ai_models[workerType],
+      model_source: 'kv_config',
+      worker_type: workerType,
+      cache_updated_at: configData.updated_at,
+      cache_version: configData.version
+    };
   }
   
-  // Fallback to env.MODEL_NAME or hardcoded default
   if (env.MODEL_NAME) {
-    console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] ✅ Using env fallback model for ${workerType}: ${env.MODEL_NAME}`);
+    console.log(`[AI Model Info] ✅ Using env fallback model for ${workerType}: ${env.MODEL_NAME}`);
     return {
       current_model: env.MODEL_NAME,
       model_source: 'env_fallback',
@@ -121,8 +88,8 @@ async function getAIModelInfo(env, workerType = 'topic_generator') {
     };
   }
   
-  const hardcodedDefault = '@cf/meta/llama-3.1-8b-instruct';
-  console.log(`[AI Model Info] [WORKER_SYNC_DEBUG] ✅ Using hardcoded default model for ${workerType}: ${hardcodedDefault}`);
+  const hardcodedDefault = '@cf/meta/llama-4-scout-17b-16e-instruct';
+  console.log(`[AI Model Info] ✅ Using hardcoded default model for ${workerType}: ${hardcodedDefault}`);
   return {
     current_model: hardcodedDefault,
     model_source: 'hardcoded_default',
@@ -130,7 +97,30 @@ async function getAIModelInfo(env, workerType = 'topic_generator') {
   };
 }
 
-// Premium AI call with extended timeouts for deep analysis (up to 3 minutes)
+/**
+ * Extract response text from various AI response formats
+ */
+function extractAIResponseText(aiResponse) {
+  if (typeof aiResponse === 'string') {
+    return aiResponse;
+  }
+  
+  if (aiResponse.response) {
+    return typeof aiResponse.response === 'string' ? 
+      aiResponse.response : 
+      aiResponse.response.text || JSON.stringify(aiResponse.response);
+  }
+  
+  if (aiResponse.choices?.[0]) {
+    return aiResponse.choices[0].text || aiResponse.choices[0].message?.content || '';
+  }
+  
+  return '';
+}
+
+/**
+ * Premium AI call with extended timeouts for deep analysis
+ */
 async function callAIWithTimeout(aiBinding, model, messages, options = {}, timeoutMs = 120000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -138,8 +128,8 @@ async function callAIWithTimeout(aiBinding, model, messages, options = {}, timeo
   try {
     const response = await aiBinding.run(model, {
       messages,
-      temperature: options.temperature || 0.3, // Slightly lower for more consistent quality
-      max_tokens: options.max_tokens || 4000, // INCREASED for longer answers
+      temperature: options.temperature || 0.3,
+      max_tokens: options.max_tokens || 4000,
       signal: controller.signal
     });
     
@@ -154,74 +144,97 @@ async function callAIWithTimeout(aiBinding, model, messages, options = {}, timeo
   }
 }
 
-// Enhanced JSON cleaning
-function cleanJsonResponse(text) {
-  text = text.replace(/```json\s*/gi, '').replace(/```\s*$/gi, '');
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    return jsonMatch[0];
+/**
+ * Enhanced JSON cleaning and parsing
+ */
+function cleanAndParseJSON(text) {
+  try {
+    // Remove markdown code blocks
+    text = text.replace(/```json\s*/gi, '').replace(/```\s*$/gi, '');
+    
+    // Extract JSON object
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      text = jsonMatch[0];
+    }
+    
+    // Parse and validate
+    const parsed = JSON.parse(text);
+    return parsed;
+  } catch (error) {
+    console.error('JSON parsing error:', error.message);
+    throw new Error('Failed to parse AI response as JSON');
   }
-  return text;
 }
 
-// Enhanced content extraction function
+/**
+ * Enhanced content extraction function
+ */
 async function extractContentUltimate(html) {
-  const root = parse(html, {
-    lowerCaseTagName: false,
-    comment: false,
-    blockTextElements: {
-      script: true,
-      style: false,
-      pre: true
-    }
-  });
-
-  // Remove unwanted elements
-  ['script', 'style', 'nav', 'footer', 'header', '.sidebar', '.menu', '.advertisement'].forEach(selector => {
-    root.querySelectorAll(selector).forEach(el => el.remove());
-  });
-
-  // Enhanced title extraction
-  let title = '';
-  const titleEl = root.querySelector('title');
-  const h1El = root.querySelector('h1');
-  
-  if (titleEl) title = titleEl.text.trim();
-  else if (h1El) title = h1El.text.trim();
-  
-  // Enhanced heading extraction
-  const headings = [];
-  ['h1', 'h2', 'h3', 'h4'].forEach(tag => {
-    root.querySelectorAll(tag).forEach(el => {
-      const text = el.text.trim();
-      if (text.length > 5 && text.length < 100) {
-        headings.push(text);
+  try {
+    const root = parse(html, {
+      lowerCaseTagName: false,
+      comment: false,
+      blockTextElements: {
+        script: true,
+        style: false,
+        pre: true
       }
     });
-  });
 
-  // Enhanced content extraction with better text processing
-  const contentElements = root.querySelectorAll('main, article, .content, .post, .entry, p, div, section');
-  let allText = '';
-  
-  contentElements.forEach(el => {
-    const text = el.text || '';
-    if (text.length > 20) {
-      allText += text + ' ';
-    }
-  });
+    // Remove unwanted elements
+    const selectorsToRemove = ['script', 'style', 'nav', 'footer', 'header', '.sidebar', '.menu', '.advertisement'];
+    selectorsToRemove.forEach(selector => {
+      root.querySelectorAll(selector).forEach(el => el.remove());
+    });
 
-  // Clean and process content
-  const content = allText
-    .replace(/\s+/g, ' ')
-    .replace(/[^\w\s.,!?;:()\-\/]/g, '')
-    .trim();
+    // Enhanced title extraction
+    let title = '';
+    const titleEl = root.querySelector('title');
+    const h1El = root.querySelector('h1');
+    
+    if (titleEl) title = titleEl.text.trim();
+    else if (h1El) title = h1El.text.trim();
+    
+    // Enhanced heading extraction
+    const headings = [];
+    const headingTags = ['h1', 'h2', 'h3', 'h4'];
+    headingTags.forEach(tag => {
+      root.querySelectorAll(tag).forEach(el => {
+        const text = el.text.trim();
+        if (text.length > 5 && text.length < 100) {
+          headings.push(text);
+        }
+      });
+    });
 
-  return {
-    title: title || 'Untitled Page',
-    headings: headings.slice(0, 8), // More headings for better context
-    content: content
-  };
+    // Enhanced content extraction with better text processing
+    const contentSelectors = ['main', 'article', '.content', '.post', '.entry', 'p', 'div', 'section'];
+    const contentElements = root.querySelectorAll(contentSelectors.join(', '));
+    let allText = '';
+    
+    contentElements.forEach(el => {
+      const text = el.text || '';
+      if (text.length > 20) {
+        allText += text + ' ';
+      }
+    });
+
+    // Clean and process content
+    const content = allText
+      .replace(/\s+/g, ' ')
+      .replace(/[^\w\s.,!?;:()\-\/'"]/g, '')
+      .trim();
+
+    return {
+      title: title || 'Untitled Page',
+      headings: headings.slice(0, 8),
+      content: content
+    };
+  } catch (error) {
+    console.error('Content extraction error:', error);
+    throw new Error('Failed to extract page content');
+  }
 }
 
 export default {
@@ -236,68 +249,151 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
 
-    // Initialize enhanced rate limiter with dynamic configuration for AI-intensive operations
-    const rateLimiter = await createRateLimiter(env, 'url-to-faq-generator-worker', {
-      // Fallback configuration if dynamic config fails
-      hourlyLimit: 5,     // Very strict - intensive 3-minute AI operations
-      dailyLimit: 15,     // Conservative daily allowance
-      weeklyLimit: 75,    // Weekly budget for URL-to-FAQ generation
-      monthlyLimit: 300,  // Monthly limit for premium service
-      violationThresholds: {
-        soft: 2,          // Quick soft limit due to expensive operations
-        hard: 4,          // Hard limit before temp blocks
-        ban: 8            // Permanent ban threshold
-      }
-    });
+    // Note: Rate limiting is now handled by the centralized enhanced-rate-limiting worker
 
     const url = new URL(request.url);
 
-    // EMERGENCY HEALTH CHECK - with timeout protection
+    // Health check endpoint with timeout protection
     if (request.method === 'GET' && url.pathname === '/health') {
+      const healthStartTime = Date.now();
+      
       try {
-        // EMERGENCY: Execute health check with timeout protection
-        const healthPromise = generateDynamicHealthResponse(
-          'url-to-faq-generator-worker',
-          env,
-          '3.1.0-advanced-cache-optimized',
-          ['url_analysis', 'deep_content_extraction', 'premium_faq_generation', 'multi_pass_optimization', 'enhanced_rate_limiting']
-        );
+        const healthPromise = (async () => {
+          const healthResponse = await generateDynamicHealthResponse(
+            'url-to-faq-generator-worker',
+            env,
+            '3.1.0-advanced-cache-optimized',
+            ['url_analysis', 'deep_content_extraction', 'premium_faq_generation', 'multi_pass_optimization', 'enhanced_rate_limiting']
+          );
+          
+          const aiModelInfo = await getAIModelInfo(env, 'url_faq_generator');
+          
+          // Calculate response time
+          const responseTime = Date.now() - healthStartTime;
+          
+          // Get performance metrics from KV if available
+          let performanceMetrics = {
+            avg_response_time_ms: 0,
+            total_requests_served: 0
+          };
+          
+          try {
+            const metrics = await env.WORKER_METRICS?.get(`metrics_url_faq_generator`, { type: 'json' });
+            if (metrics) {
+              performanceMetrics = {
+                avg_response_time_ms: metrics.avg_response_time_ms || 0,
+                total_requests_served: metrics.total_requests_served || 0
+              };
+            }
+          } catch (e) {
+            console.log('[Health] Metrics not available');
+          }
+          
+          // Merge generateDynamicHealthResponse results with additional data
+          return {
+            ...healthResponse, // Spread the base health response
+            status: 'OK',
+            service: 'url-to-faq-generator-worker',
+            timestamp: new Date().toISOString(),
+            version: '3.1.0-advanced-cache-optimized',
+            mode: 'full',
+            model: {
+              name: aiModelInfo.current_model,
+              max_tokens: 800,
+              temperature: 0.4
+            },
+            configuration: {
+              source: aiModelInfo.model_source === 'kv_config' ? 'dynamic' : 'default',
+              last_updated: new Date().toISOString(),
+              config_version: 1
+            },
+            performance: {
+              avg_response_time_ms: performanceMetrics.avg_response_time_ms,
+              total_requests_served: performanceMetrics.total_requests_served,
+              response_time_ms: responseTime
+            },
+            operational_status: {
+              health: 'healthy',
+              ai_binding_available: true,
+              config_loaded: true
+            },
+            features: healthResponse.features || [
+              'url_analysis',
+              'deep_content_extraction',
+              'premium_faq_generation',
+              'multi_pass_optimization',
+              'enhanced_rate_limiting'
+            ],
+            health_indicators: {
+              overall_system_health: 'healthy',
+              ai_health: 'available'
+            },
+            cache_status: healthResponse.cache_status || 'active',
+            current_model: aiModelInfo.current_model,
+            model_source: aiModelInfo.model_source,
+            worker_type: 'url_faq_generator'
+          };
+        })();
         
         const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Health check timeout')), 400)
         );
         
-        const healthResponse = await Promise.race([healthPromise, timeoutPromise]);
+        const response = await Promise.race([healthPromise, timeoutPromise]);
         
-        // Add AI model information to health response
-        const aiModelInfo = await getAIModelInfo(env, 'topic_generator');
-        healthResponse.current_model = aiModelInfo.current_model;
-        healthResponse.model_source = aiModelInfo.model_source;
-        healthResponse.worker_type = aiModelInfo.worker_type;
-        
-        // Ensure consistent status response across all workers
-        healthResponse.status = 'OK';
-        
-        return new Response(JSON.stringify(healthResponse), {
+        return new Response(JSON.stringify(response), {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' }
         });
         
       } catch (error) {
-        console.warn('[Health Check] EMERGENCY fallback for url-to-faq-generator-worker:', error.message);
+        console.warn('[Health Check] Emergency fallback:', error.message);
         
-        // EMERGENCY: Always return HTTP 200 to prevent monitoring cascade failures
+        const responseTime = Date.now() - healthStartTime;
+        
         const emergencyResponse = {
+          status: 'OK',
           worker: 'url-to-faq-generator-worker',
-          status: 'healthy',
+          service: 'url-to-faq-generator-worker',
           timestamp: new Date().toISOString(),
           version: '3.1.0-advanced-cache-optimized',
-          capabilities: ['url_analysis', 'deep_content_extraction', 'premium_faq_generation', 'multi_pass_optimization', 'enhanced_rate_limiting'],
-          current_model: env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct',
+          mode: 'full',
+          model: {
+            name: env.MODEL_NAME || '@cf/meta/llama-4-scout-17b-16e-instruct',
+            max_tokens: 800,
+            temperature: 0.4
+          },
+          configuration: {
+            source: 'default',
+            last_updated: new Date().toISOString(),
+            config_version: 1
+          },
+          performance: {
+            avg_response_time_ms: 0,
+            total_requests_served: 0,
+            response_time_ms: responseTime
+          },
+          operational_status: {
+            health: 'healthy',
+            ai_binding_available: false,
+            config_loaded: false
+          },
+          features: [
+            'url_analysis',
+            'deep_content_extraction',
+            'premium_faq_generation',
+            'multi_pass_optimization',
+            'enhanced_rate_limiting'
+          ],
+          health_indicators: {
+            overall_system_health: 'healthy',
+            ai_health: 'fallback'
+          },
+          cache_status: 'active',
+          current_model: env.MODEL_NAME || '@cf/meta/llama-4-scout-17b-16e-instruct',
           model_source: 'env_fallback',
-          worker_type: 'topic_generator',
-          rate_limiting: { enabled: true, enhanced: true },
-          cache_status: 'active'
+          worker_type: 'url_faq_generator',
+          capabilities: ['url_analysis', 'deep_content_extraction', 'premium_faq_generation', 'multi_pass_optimization', 'enhanced_rate_limiting']
         };
         
         return new Response(JSON.stringify(emergencyResponse), {
@@ -307,23 +403,21 @@ export default {
       }
     }
     
-    // Handle cache clearing endpoint (both GET and POST)
+    // Cache clearing endpoint
     if (url.pathname === '/cache/clear') {
       try {
-        console.log('[Cache Clear] URL-to-FAQ generator worker cache clearing initiated...');
+        console.log('[Cache Clear] Initiating cache clear...');
         
-        // Initialize cache manager for URL-to-FAQ generator worker
-        await initializeCacheManager('topic_generator', env);
+        await initializeCacheManager('url_faq_generator', env);
         
-        // Clear comprehensive cache types with URL-to-FAQ-specific patterns
-        const cacheResult = await invalidateWorkerCaches('topic_generator', env, {
+        const cacheResult = await invalidateWorkerCaches('url_faq_generator', env, {
           ai_model_config: true,
           worker_health: true,
           suggestion_cache: true,
           l1_cache: true,
           l2_cache: true,
           patterns: [
-            'topic_generator_*',
+            'url_faq_generator_*',
             'url_faq_*',
             'ai_model_*',
             'content_extraction_*',
@@ -333,7 +427,7 @@ export default {
           ]
         });
         
-        console.log('[Cache Clear] URL-to-FAQ generator worker cache clearing completed:', cacheResult);
+        console.log('[Cache Clear] Completed:', cacheResult);
         
         return new Response(JSON.stringify({
           success: true,
@@ -349,7 +443,7 @@ export default {
         });
         
       } catch (error) {
-        console.error('[Cache Clear] URL-to-FAQ generator worker cache clearing failed:', error);
+        console.error('[Cache Clear] Failed:', error);
         
         return new Response(JSON.stringify({
           success: false,
@@ -380,7 +474,8 @@ export default {
         throw new Error('AI binding not found');
       }
       
-      const { url: targetUrl, options = {} } = await request.json();
+      const requestBody = await request.json();
+      const { url: targetUrl, options = {} } = requestBody;
       
       if (!targetUrl) {
         return new Response(JSON.stringify({
@@ -408,43 +503,23 @@ export default {
         });
       }
 
-      // Enhanced rate limiting check
-      const clientIP = request.headers.get('CF-Connecting-IP') || 'unknown';
-      const rateLimitResult = await rateLimiter.checkRateLimit(clientIP, request, 'url-to-faq-generator-worker');
-      
-      if (!rateLimitResult.allowed) {
-        return new Response(JSON.stringify({
-          rateLimited: true,
-          error: rateLimitResult.reason,
-          retryAfter: rateLimitResult.retryAfter,
-          resetTime: rateLimitResult.resetTime,
-          success: false,
-          violation_type: rateLimitResult.violationType,
-          block_duration: rateLimitResult.blockDuration
-        }), {
-          status: rateLimitResult.violationType === 'IP_BLACKLISTED' ? 403 : 429,
-          headers: {
-            ...corsHeaders,
-            'Content-Type': 'application/json',
-            'Retry-After': rateLimitResult.retryAfter?.toString() || '3600'
-          }
-        });
-      }
+      // Rate limiting is now handled by the centralized enhanced-rate-limiting worker
+      // This worker no longer performs individual rate limiting checks
 
-      // Update usage count immediately after rate limit check passes
-      await rateLimiter.updateUsageCount(clientIP, 'url-to-faq-generator-worker');
-      console.log(`[Rate Limiting] Updated usage count for IP ${clientIP}`);
-
-      // ENHANCED: Quality focused with sensible 12 FAQ limit
+      // Set FAQ count with limits
       const faqCount = Math.min(Math.max(options.faqCount || 12, 6), 12);
       console.log(`Starting PREMIUM DEEP ANALYSIS of ${faqCount} FAQs (15K content analysis)`);
+
+      // Get dynamic AI model early
+      const aiModel = await getAIModel(env, 'url_faq_generator');
+      console.log(`[AI Model] Using model: ${aiModel} for url_faq_generator worker`);
 
       // STEP 1: Enhanced Content Extraction
       let pageContent, title, headings, extractedContent;
       
       try {
         const controller = new AbortController();
-        const fetchTimeout = setTimeout(() => controller.abort(), 30000); // Extended fetch timeout
+        const fetchTimeout = setTimeout(() => controller.abort(), 30000);
         
         const pageResponse = await fetch(targetUrl, {
           signal: controller.signal,
@@ -484,11 +559,10 @@ export default {
       }
 
       // STEP 2: PREMIUM DEEP CONTENT ANALYSIS
-      // EXTENSIVE CONTENT for deep understanding (15K characters)
-      const contentLimit = 15000; // DEEP ANALYSIS MODE
+      const contentLimit = 15000;
       const contentForAI = extractedContent.substring(0, contentLimit);
 
-      // Enhanced prompts for maximum quality with deep content understanding
+      // Enhanced prompts for maximum quality
       const generationPrompt = `Generate ${faqCount} comprehensive, premium-quality FAQs about "${title}".
 
 DEEP CONTENT ANALYSIS (15,000 characters processed):
@@ -531,48 +605,32 @@ Output Format - Return exactly ${faqCount} premium-quality FAQs as JSON:
 
 CRITICAL: Only return the JSON. Make every FAQ exceptionally valuable using the deep content understanding from 15K character analysis.`;
 
-      // Get dynamic AI model for this worker
-      const aiModel = await getAIModel(env, 'topic_generator');
-      console.log(`[AI Model] Using model: ${aiModel} for topic_generator worker`);
-
       let initialFAQs;
-      // PREMIUM: Extended processing for deep analysis
-      const maxTokens = 6000; // MUCH HIGHER for comprehensive answers
-      const timeout = 150000; // 2.5 minutes for thorough processing
+      const maxTokens = 6000;
+      const timeout = 150000;
 
       try {
         const aiResponse = await callAIWithTimeout(
           env.AI,
-          aiModel, // DYNAMIC MODEL FROM KV CONFIG
+          aiModel,
           [
             { role: 'system', content: 'You are a premium FAQ specialist with deep content analysis capabilities. Generate exceptionally detailed, high-value FAQs using comprehensive content understanding. Focus on creating FAQs that provide maximum value to users and perform excellently in search results.' },
             { role: 'user', content: generationPrompt }
           ],
-          { temperature: 0.3, max_tokens: maxTokens }, // Lower temperature for consistency
+          { temperature: 0.3, max_tokens: maxTokens },
           timeout
         );
 
-        let responseText = '';
-        if (typeof aiResponse === 'string') {
-          responseText = aiResponse;
-        } else if (aiResponse.response) {
-          responseText = typeof aiResponse.response === 'string' ? 
-            aiResponse.response : 
-            aiResponse.response.text || JSON.stringify(aiResponse.response);
-        } else if (aiResponse.choices?.[0]) {
-          responseText = aiResponse.choices[0].text || aiResponse.choices[0].message?.content || '';
-        }
-
-        responseText = cleanJsonResponse(responseText);
-        initialFAQs = JSON.parse(responseText);
+        const responseText = extractAIResponseText(aiResponse);
+        initialFAQs = cleanAndParseJSON(responseText);
 
         console.log(`Enhanced generation: ${initialFAQs.mainEntity?.length} FAQs in ${Date.now() - startTime}ms`);
         
       } catch (error) {
         console.error('Primary model failed:', error.message);
         
-        // Fallback to default model with same quality settings
-        const fallbackModel = env.MODEL_NAME || '@cf/meta/llama-3.1-8b-instruct';
+        // Fallback to default model
+        const fallbackModel = env.MODEL_NAME || '@cf/meta/llama-4-scout-17b-16e-instruct';
         console.log(`[AI Model] Primary model failed, using fallback: ${fallbackModel}`);
         
         try {
@@ -587,20 +645,11 @@ CRITICAL: Only return the JSON. Make every FAQ exceptionally valuable using the 
             timeout
           );
 
-          let responseText = '';
-          if (typeof fallbackResponse === 'string') {
-            responseText = fallbackResponse;
-          } else if (fallbackResponse.response) {
-            responseText = typeof fallbackResponse.response === 'string' ? 
-              fallbackResponse.response : 
-              fallbackResponse.response.text || JSON.stringify(fallbackResponse.response);
-          }
-
-          responseText = cleanJsonResponse(responseText);
-          initialFAQs = JSON.parse(responseText);
+          const responseText = extractAIResponseText(fallbackResponse);
+          initialFAQs = cleanAndParseJSON(responseText);
           
         } catch (fallbackError) {
-          throw new Error('Enhanced FAQ generation failed');
+          throw new Error('Enhanced FAQ generation failed: ' + fallbackError.message);
         }
       }
 
@@ -611,8 +660,8 @@ CRITICAL: Only return the JSON. Make every FAQ exceptionally valuable using the 
       // STEP 3: MULTIPLE AI OPTIMIZATION PASSES
       let finalFAQs = initialFAQs;
       
-      // Multiple optimization passes for premium quality (up to 3 minutes total)
-      if (Date.now() - startTime < 120000) { // Allow 2+ minutes for optimization
+      // Multiple optimization passes for premium quality
+      if (Date.now() - startTime < 120000) {
         console.log('Running PREMIUM multi-pass optimization...');
         
         // PASS 1: SEO and Structure Optimization
@@ -636,7 +685,7 @@ Return the SEO-optimized FAQs in the same JSON format.`;
 
           const seoResponse = await callAIWithTimeout(
             env.AI,
-            '@cf/meta/llama-3.1-8b-instruct',
+            aiModel, // Use dynamic model instead of hardcoded
             [
               { role: 'system', content: 'You are an SEO expert specializing in FAQ optimization for search engines and voice assistants.' },
               { role: 'user', content: seoOptimizationPrompt }
@@ -645,17 +694,8 @@ Return the SEO-optimized FAQs in the same JSON format.`;
             45000
           );
 
-          let seoText = '';
-          if (typeof seoResponse === 'string') {
-            seoText = seoResponse;
-          } else if (seoResponse.response) {
-            seoText = typeof seoResponse.response === 'string' ? 
-              seoResponse.response : 
-              seoResponse.response.text || JSON.stringify(seoResponse.response);
-          }
-
-          seoText = cleanJsonResponse(seoText);
-          const seoOptimizedFAQs = JSON.parse(seoText);
+          const seoText = extractAIResponseText(seoResponse);
+          const seoOptimizedFAQs = cleanAndParseJSON(seoText);
           
           if (seoOptimizedFAQs?.mainEntity && Array.isArray(seoOptimizedFAQs.mainEntity)) {
             finalFAQs = seoOptimizedFAQs;
@@ -666,8 +706,8 @@ Return the SEO-optimized FAQs in the same JSON format.`;
           console.log('SEO optimization failed, continuing:', seoError.message);
         }
         
-        // PASS 2: Content Quality and Detail Enhancement (if time allows)
-        if (Date.now() - startTime < 100000) { // If under 1:40, do second pass
+        // PASS 2: Content Quality and Detail Enhancement
+        if (Date.now() - startTime < 100000) {
           try {
             const qualityPrompt = `PASS 2 - CONTENT QUALITY ENHANCEMENT
 
@@ -689,7 +729,7 @@ Return the quality-enhanced FAQs in the same JSON format.`;
 
             const qualityResponse = await callAIWithTimeout(
               env.AI,
-              '@cf/meta/llama-3.1-8b-instruct',
+              aiModel, // Use dynamic model instead of hardcoded
               [
                 { role: 'system', content: 'You are a content quality specialist focused on creating valuable, detailed, and engaging FAQ content.' },
                 { role: 'user', content: qualityPrompt }
@@ -698,17 +738,8 @@ Return the quality-enhanced FAQs in the same JSON format.`;
               45000
             );
 
-            let qualityText = '';
-            if (typeof qualityResponse === 'string') {
-              qualityText = qualityResponse;
-            } else if (qualityResponse.response) {
-              qualityText = typeof qualityResponse.response === 'string' ? 
-                qualityResponse.response : 
-                qualityResponse.response.text || JSON.stringify(qualityResponse.response);
-            }
-
-            qualityText = cleanJsonResponse(qualityText);
-            const qualityEnhancedFAQs = JSON.parse(qualityText);
+            const qualityText = extractAIResponseText(qualityResponse);
+            const qualityEnhancedFAQs = cleanAndParseJSON(qualityText);
             
             if (qualityEnhancedFAQs?.mainEntity && Array.isArray(qualityEnhancedFAQs.mainEntity)) {
               finalFAQs = qualityEnhancedFAQs;
@@ -721,13 +752,13 @@ Return the quality-enhanced FAQs in the same JSON format.`;
         }
       }
 
-      // Premium validation - higher quality standards with 15K content analysis
+      // Premium validation
       const validFAQs = finalFAQs.mainEntity.filter(faq => 
         faq?.name && 
         faq?.acceptedAnswer?.text && 
-        faq.name.length >= 25 && // Higher minimum for premium
+        faq.name.length >= 25 &&
         faq.name.length <= 120 && 
-        faq.acceptedAnswer.text.length >= 80 && // Higher minimum for detailed answers
+        faq.acceptedAnswer.text.length >= 80 &&
         faq.acceptedAnswer.text.length <= 1000 && 
         !faq.name.toLowerCase().includes('untitled') &&
         !faq.acceptedAnswer.text.toLowerCase().includes('no information') &&
@@ -738,14 +769,9 @@ Return the quality-enhanced FAQs in the same JSON format.`;
         throw new Error(`Only ${validFAQs.length} high-quality FAQs generated (needed ${Math.floor(faqCount * 0.7)})`);
       }
 
-      
-
       const processingTime = Date.now() - startTime;
-      const wasEnhanced = processingTime < 120000; // 2 minute enhancement window
+      const wasEnhanced = processingTime < 120000;
       
-      // Get current usage data for response metadata
-      const currentUsage = await rateLimiter.getCurrentUsage(clientIP, 'url-to-faq-generator-worker', new Date());
-
       return new Response(JSON.stringify({
         success: true,
         source: targetUrl,
@@ -755,23 +781,12 @@ Return the quality-enhanced FAQs in the same JSON format.`;
           totalGenerated: validFAQs.length,
           processingTime: processingTime,
           model: aiModel,
-          worker_type: 'topic_generator',
+          worker_type: 'url_faq_generator',
           dynamic_model: true,
           enhanced: wasEnhanced,
-          qualityMode: 'premium-deep-analysis', // Premium indicator
+          qualityMode: 'premium-deep-analysis',
           contentAnalyzed: '15K characters',
-          optimizationPasses: wasEnhanced ? 'multi-pass' : 'single-pass',
-          rate_limiting: {
-            service: 'url-to-faq-generator-worker',
-            limits: {
-              hourly: 5,
-              daily: 15,
-              weekly: 75,
-              monthly: 300
-            },
-            current_usage: currentUsage,
-            features: ['ip_management', 'progressive_penalties', 'violation_tracking']
-          }
+          optimizationPasses: wasEnhanced ? 'multi-pass' : 'single-pass'
         }
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
